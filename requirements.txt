@@ -1,0 +1,25 @@
+# Generated from pyproject.toml. Install with: pip install -r requirements.txt
+# For a full editable install with dev extras: pip install -e ".[dev]"
+
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+pdfminer.six>=20231228
+pdf2image>=1.17.0
+Pillow>=10.3.0
+pytesseract>=0.3.10
+opencv-python-headless>=4.9.0
+deskew>=1.5.1
+nltk>=3.8.1
+tiktoken>=0.7.0
+chromadb>=0.5.0
+openai>=1.30.0
+anthropic>=0.28.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.30
+pyyaml>=6.0.1
+python-dotenv>=1.0.1
+structlog>=24.1.0
+rich>=13.7.1
