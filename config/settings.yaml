@@ -1,0 +1,79 @@
+# LegalDraft Configuration
+# Environment variables override these values with the prefix LD_
+# Example: LD_LLM__BASE_URL overrides llm.base_url
+
+llm:
+  base_url: "http://localhost:8080/v1"  # vLLM OpenAI-compatible endpoint
+  model: "mistralai/Mistral-Small-3.1-24B-Instruct"
+  max_tokens: 4096
+  api_key: "local"                      # vLLM requires a non-empty value; content is ignored
+
+ocr:
+  engine: "tesseract"                   # tesseract | azure_vision | google_vision
+  dpi: 300                              # DPI for PDF-to-image rendering (300 = good quality)
+  language: "eng"                       # tesseract language code
+  image_only_threshold: 100             # chars/page below which PDF page is treated as image-only
+  preprocessing:
+    deskew: true
+    denoise: true
+    contrast_enhance: true              # CLAHE adaptive histogram equalization
+    binarize: true                      # Otsu thresholding
+  tesseract:
+    oem: 3                              # 3 = LSTM only (most accurate)
+    psm: 6                              # 6 = uniform text block; 11 = sparse text (survey maps)
+  confidence:
+    low_threshold: 0.40                 # average word confidence below this → chunk flagged low_confidence
+    failure_threshold: 0.10             # average word confidence below this → page marked ocr_failed
+
+chunking:
+  strategy: "sentence"                  # sentence | fixed | paragraph
+  chunk_size: 512                       # target token count per chunk
+  overlap: 64                           # token overlap between consecutive chunks
+  min_chunk_size: 50                    # chunks smaller than this are merged with the next
+
+embedding:
+  provider: "local"                     # local | openai
+  local_model: "BAAI/bge-large-en-v1.5" # sentence-transformers model, runs on GPU
+  device: "cuda"                        # cuda | cpu
+  batch_size: 64                        # chunks per embedding batch
+
+retrieval:
+  top_k: 8                              # maximum chunks returned per draft request
+  min_score: 0.35                       # cosine similarity below this → chunk excluded
+  queries_per_draft:
+    case_fact_summary:
+      - "parties grantor grantee trustee beneficiary"
+      - "property address legal description"
+      - "recording date instrument number loan amount"
+      - "flags missing pages illegible anomalies"
+
+generation:
+  temperature: 0.1                      # low for factual accuracy; increase for more fluency
+  max_tokens: 4096
+  draft_types:
+    - "case_fact_summary"
+
+storage:
+  document_dir: "./data/documents"      # where uploaded files are stored on disk
+  postgres_dsn: "postgresql://ld:ld@localhost:5432/legaldraft"
+  vector_store:
+    host: "localhost"
+    port: 8001
+    collection: "legaldraft_chunks"
+
+learning:
+  min_frequency_threshold: 3           # patterns below this frequency are stored but not injected
+  max_patterns_per_prompt: 5           # maximum patterns injected into a single generation prompt
+  dedup_similarity_threshold: 0.2      # edit distance ratio below this = near-duplicate pattern
+  classify_edits: true                 # set false to skip LLM classification (store all edits raw)
+
+logging:
+  level: "INFO"                         # DEBUG | INFO | WARNING | ERROR
+  format: "json"                        # json | text
+  ocr_confidence_warnings: true         # log a warning for chunks with low OCR confidence
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  debug: false
+  max_upload_size_mb: 50
