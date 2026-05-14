@@ -2,7 +2,7 @@
 
 ## System Overview
 
-LegalDraft is a pipeline system. Each stage has a single responsibility and a defined input/output boundary, so components can be swapped independently. The pipeline is synchronous for v1.
+LexAI is a pipeline system. Each stage has a single responsibility and a defined input/output boundary, so components can be swapped independently. The pipeline is synchronous for v1.
 
 ---
 

@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.backends.legacy:build"
 
 [project]
-name = "legaldraft"
+name = "lexai"
 version = "0.1.0"
 description = "Legal document ingestion and grounded draft generation"
 requires-python = ">=3.11"
@@ -66,8 +66,8 @@ dev = [
 ]
 
 [project.scripts]
-legaldraft-ingest = "src.scripts.ingest_batch:main"
-legaldraft-serve = "src.api.routes:run"
+lexai-ingest = "src.scripts.ingest_batch:main"
+lexai-serve = "src.api.routes:run"
 
 [tool.ruff]
 line-length = 100

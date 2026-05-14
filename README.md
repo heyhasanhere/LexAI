@@ -1,4 +1,4 @@
-# LegalDraft — Legal Document Ingestion and Draft Generation System
+# LexAI — Legal Document Ingestion and Draft Generation System
 
 An internal workflow that ingests messy legal documents, extracts structured information, retrieves relevant evidence, and generates grounded draft outputs that operators can edit and improve over time.
 
@@ -47,7 +47,7 @@ Raw Documents
 ## Directory Structure
 
 ```
-legaldraft/
+lexai/
 ├── README.md
 ├── docs/
 │   ├── architecture.md          # component diagram + technology choices
@@ -96,7 +96,7 @@ legaldraft/
 
 ```bash
 git clone <repo-url>
-cd legaldraft
+cd lexai
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt

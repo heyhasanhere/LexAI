@@ -50,12 +50,12 @@ services:
     environment:
       POSTGRES_USER: ld
       POSTGRES_PASSWORD: ld
-      POSTGRES_DB: legaldraft
+      POSTGRES_DB: lexai
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ld -d legaldraft"]
+      test: ["CMD-SHELL", "pg_isready -U ld -d lexai"]
       interval: 10s
       timeout: 5s
       retries: 5

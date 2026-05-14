@@ -1,4 +1,4 @@
-# LegalDraft Configuration
+# LexAI Configuration
 # Environment variables override these values with the prefix LD_
 # Example: LD_LLM__BASE_URL overrides llm.base_url
 
@@ -55,11 +55,11 @@ generation:
 
 storage:
   document_dir: "./data/documents"      # where uploaded files are stored on disk
-  postgres_dsn: "postgresql://ld:ld@localhost:5432/legaldraft"
+  postgres_dsn: "postgresql://ld:ld@localhost:5432/lexai"
   vector_store:
     host: "localhost"
     port: 8001
-    collection: "legaldraft_chunks"
+    collection: "lexai_chunks"
 
 learning:
   min_frequency_threshold: 3           # patterns below this frequency are stored but not injected
