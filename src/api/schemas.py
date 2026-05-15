@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class DocumentUploadResponse(BaseModel):
@@ -10,26 +10,28 @@ class DocumentUploadResponse(BaseModel):
     status: str
 
 
-class PartySchema(BaseModel):
-    role: str
-    name: str | None
-    entity_type: str | None
-    confidence: str
-
-
 class ExtractedFieldsSchema(BaseModel):
-    document_type: str | None
-    parties: list[PartySchema]
-    property_address: str | None
-    legal_description: str | None
-    recording_date: str | None
-    instrument_number: str | None
-    loan_amount: float | None
-    maturity_date: str | None
-    notary_present: bool | None
-    key_value_pairs: list[dict[str, Any]]
-    extraction_notes: str | None
-    flags: list[str]
+    model_config = ConfigDict(extra="ignore")
+
+    document_type: str | None = None
+    parties: list[dict[str, Any]] = []
+    key_dates: list[dict[str, Any]] = []
+    key_clauses: list[dict[str, Any]] = []
+    flags_and_risks: list[dict[str, Any]] = []
+    matter_timeline: list[dict[str, Any]] = []
+    obligation_tracker: list[dict[str, Any]] = []
+    risk_summary: dict[str, Any] | None = None
+    clause_library: list[dict[str, Any]] = []
+    party_profile: list[dict[str, Any]] = []
+    due_diligence_checklist: list[dict[str, Any]] = []
+    anomaly_report: list[dict[str, Any]] = []
+    transcript_summary: list[dict[str, Any]] = []
+    case_law_citations: list[dict[str, Any]] = []
+    document_gap_report: list[dict[str, Any]] = []
+    audit_trail: list[dict[str, Any]] = []
+    source_grounding: list[dict[str, Any]] = []
+    extraction_notes: str | None = None
+    flags: list[str] = []
 
 
 class DocumentResponse(BaseModel):

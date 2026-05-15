@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 import pytesseract
+import yaml
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 
@@ -32,11 +33,12 @@ from src.learning.pattern_store import (
     init_db as init_pattern_db,
     upsert_pattern,
 )
-from src.retrieval.vector_store import query as vector_query, upsert_chunks
+from src.retrieval.vector_store import delete_by_document, query as vector_query, upsert_chunks
 from src.utils.logger import get_logger
 from src.utils.storage import (
     create_document,
     create_draft,
+    delete_document,
     get_document,
     get_draft,
     init_db,
@@ -50,15 +52,31 @@ logger = get_logger(__name__)
 
 app = FastAPI(title="LexAI", version="0.1.0")
 
-# ── Config ─────────────────────────────────────────────────────────────────────
-# These are set from settings.yaml at startup; defaults shown here.
-DSN = "postgresql://ld:ld@localhost:5432/lexai"
-CHROMA_HOST = "localhost"
-CHROMA_PORT = 8001
-LLM_BASE_URL = "http://localhost:8080/v1"
-LLM_MODEL = "mistralai/Mistral-Small-3.1-24B-Instruct"
-EMBED_DEVICE = "cuda"
-DOCUMENT_DIR = Path("./data/documents")
+# ── Config — loaded from settings.yaml at import time ──────────────────────────
+_SETTINGS_PATH = Path(__file__).parent.parent.parent / "config" / "settings.yaml"
+try:
+    _cfg = yaml.safe_load(_SETTINGS_PATH.read_text())
+except FileNotFoundError:
+    logger.warning(f"settings.yaml not found at {_SETTINGS_PATH}, using defaults")
+    _cfg = {}
+
+DSN = _cfg.get("storage", {}).get("postgres_dsn", "postgresql://ld:ld@localhost:5432/lexai")
+CHROMA_HOST = _cfg.get("storage", {}).get("vector_store", {}).get("host", "localhost")
+CHROMA_PORT = _cfg.get("storage", {}).get("vector_store", {}).get("port", 8001)
+LLM_BASE_URL = _cfg.get("llm", {}).get("base_url", "http://localhost:8080/v1")
+LLM_MODEL = _cfg.get("llm", {}).get("model", "Qwen/Qwen3-14B-AWQ")
+EMBED_DEVICE = _cfg.get("embedding", {}).get("device", "cpu")
+DOCUMENT_DIR = Path(_cfg.get("storage", {}).get("document_dir", "./data/documents"))
+
+_RETRIEVAL_QUERIES: list[str] = (
+    _cfg.get("retrieval", {}).get("queries_per_draft", {}).get("case_fact_summary")
+    or [
+        "parties entities people organizations and their roles",
+        "dates deadlines amounts identifiers reference numbers",
+        "clauses terms conditions obligations restrictions",
+        "risks flags anomalies missing information gaps quality issues",
+    ]
+)
 
 
 @app.on_event("startup")
@@ -123,7 +141,7 @@ def upload_document(
         flags = loaded.flags
 
         fields = extract_fields(
-            loaded.full_text,
+            loaded.page_annotated_text,
             base_url=LLM_BASE_URL,
             model=LLM_MODEL,
         )
@@ -191,8 +209,10 @@ def create_draft_endpoint(req: DraftRequest) -> DraftResponse:
     import json
     from src.extraction.field_extractor import ExtractedFields
     fields_by_doc = {
-        d["document_id"]: ExtractedFields(**json.loads(d["fields_json"]))
-        if d.get("fields_json") else ExtractedFields()
+        d["document_id"]: ExtractedFields(**(
+            d["fields_json"] if isinstance(d["fields_json"], dict)
+            else json.loads(d["fields_json"])
+        )) if d.get("fields_json") else ExtractedFields()
         for d in docs
     }
 
@@ -200,21 +220,27 @@ def create_draft_endpoint(req: DraftRequest) -> DraftResponse:
         (f.document_type for f in fields_by_doc.values() if f.document_type),
         None,
     )
-    sections = ["parties", "key_dates", "property", "flags_and_gaps", "suggested_next_steps"]
+    sections = ["parties", "key_dates", "key_clauses", "flags_and_risks", "obligation_tracker"]
     patterns = get_patterns(doc_type, sections, DSN)
 
     chunks = vector_query(
-        queries=[
-            "parties names and roles",
-            "property address legal description",
-            "recording date instrument number loan amount",
-            "flags missing pages illegible anomalies",
-        ],
+        queries=_RETRIEVAL_QUERIES,
         document_ids=req.document_ids,
+        top_k=2,
+        min_score=0.35,
         host=CHROMA_HOST,
         port=CHROMA_PORT,
         device=EMBED_DEVICE,
     )
+
+    doc_meta = {
+        d["document_id"]: {
+            "filename": d.get("filename", ""),
+            "page_count": d.get("page_count"),
+            "upload_timestamp": d.get("upload_timestamp"),
+        }
+        for d in docs
+    }
 
     try:
         result = generate_draft(
@@ -224,6 +250,7 @@ def create_draft_endpoint(req: DraftRequest) -> DraftResponse:
             patterns=patterns,
             base_url=LLM_BASE_URL,
             model=LLM_MODEL,
+            doc_meta=doc_meta,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -284,16 +311,19 @@ def submit_draft_endpoint(draft_id: str, req: SubmitDraftRequest) -> SubmitDraft
     import json
     doc_type = None
     if doc_row and doc_row.get("fields_json"):
-        fields = json.loads(doc_row["fields_json"])
+        raw = doc_row["fields_json"]
+        fields = raw if isinstance(raw, dict) else json.loads(raw)
         doc_type = fields.get("document_type")
 
-    candidates = diff_drafts(row["original_text"], req.submitted_text)
-    classified = classify_edits(candidates, doc_type, base_url=LLM_BASE_URL, model=LLM_MODEL)
-
     pattern_ids = []
-    for edit in classified:
-        pid = upsert_pattern(edit, doc_type, draft_id, DSN)
-        pattern_ids.append(pid)
+    try:
+        candidates = diff_drafts(row["original_text"], req.submitted_text)
+        classified = classify_edits(candidates, doc_type, base_url=LLM_BASE_URL, model=LLM_MODEL)
+        for edit in classified:
+            pid = upsert_pattern(edit, doc_type, draft_id, DSN)
+            pattern_ids.append(pid)
+    except Exception as e:
+        logger.error(f"Edit classification failed for draft {draft_id}: {e}")
 
     return SubmitDraftResponse(
         draft_id=draft_id,
@@ -301,6 +331,40 @@ def submit_draft_endpoint(draft_id: str, req: SubmitDraftRequest) -> SubmitDraft
         patterns_extracted=len(pattern_ids),
         pattern_ids=pattern_ids,
     )
+
+
+# ── Evidence ───────────────────────────────────────────────────────────────────
+
+@app.get("/drafts/{draft_id}/evidence")
+def get_draft_evidence(draft_id: str) -> list[dict]:
+    row = get_draft(draft_id, DSN)
+    if not row:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    try:
+        chunks = vector_query(
+            queries=_RETRIEVAL_QUERIES,
+            document_ids=row["document_ids"],
+            top_k=3,
+            min_score=0.25,
+            host=CHROMA_HOST,
+            port=CHROMA_PORT,
+            device=EMBED_DEVICE,
+        )
+        return [
+            {
+                "chunk_id": c.chunk_id,
+                "document_id": c.document_id,
+                "page_number": c.page_number,
+                "text": c.text,
+                "ocr_confidence": c.ocr_confidence,
+                "score": round(c.score, 3),
+                "query": c.query,
+            }
+            for c in chunks
+        ]
+    except Exception as e:
+        logger.error(f"Evidence retrieval failed for draft {draft_id}: {e}")
+        return []
 
 
 # ── Patterns ───────────────────────────────────────────────────────────────────
@@ -336,6 +400,58 @@ def list_patterns(
 def delete_pattern_endpoint(pattern_id: str) -> None:
     if not delete_pattern(pattern_id, DSN):
         raise HTTPException(status_code=404, detail="Pattern not found")
+
+
+# ── Document delete ────────────────────────────────────────────────────────────
+
+@app.delete("/documents/{document_id}", status_code=204)
+def delete_document_endpoint(document_id: str) -> None:
+    row = get_document(document_id, DSN)
+    if not row:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    delete_by_document(document_id, host=CHROMA_HOST, port=CHROMA_PORT)
+
+    for suffix in (".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".txt"):
+        f = DOCUMENT_DIR / f"{document_id}{suffix}"
+        if f.exists():
+            f.unlink()
+
+    delete_document(document_id, DSN)
+    logger.info(f"Deleted document {document_id}")
+
+
+# ── Admin reset ────────────────────────────────────────────────────────────────
+
+@app.post("/admin/reset")
+def admin_reset() -> dict:
+    import psycopg2
+    import chromadb
+    from chromadb.config import Settings
+
+    with psycopg2.connect(DSN) as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE drafts, documents, edit_patterns RESTART IDENTITY CASCADE")
+
+    client = chromadb.HttpClient(
+        host=CHROMA_HOST, port=CHROMA_PORT,
+        settings=Settings(anonymized_telemetry=False),
+    )
+    try:
+        client.delete_collection("lexai_chunks")
+    except Exception:
+        pass
+    client.get_or_create_collection("lexai_chunks", metadata={"hnsw:space": "cosine"})
+
+    removed = 0
+    for f in DOCUMENT_DIR.iterdir():
+        if f.is_file():
+            f.unlink()
+            removed += 1
+
+    logger.info(f"Admin reset complete — {removed} file(s) removed")
+    return {"status": "reset", "files_removed": removed}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
