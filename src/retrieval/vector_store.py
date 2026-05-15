@@ -74,6 +74,17 @@ def upsert_chunks(
     logger.info(f"Upserted {len(chunks)} chunks into vector store")
 
 
+def delete_by_document(document_id: str, host: str = "localhost", port: int = 8001) -> int:
+    client = _get_client(host, port)
+    collection = _get_collection(client)
+    result = collection.get(where={"document_id": document_id}, include=[])
+    count = len(result["ids"])
+    if count:
+        collection.delete(where={"document_id": document_id})
+    logger.info(f"Deleted {count} chunk(s) for document {document_id}")
+    return count
+
+
 def query(
     queries: list[str],
     document_ids: list[str],
