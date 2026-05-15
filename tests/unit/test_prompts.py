@@ -21,7 +21,7 @@ def test_prompt_contains_system_rules():
     chunks = [_make_chunk("doc-001-chunk-000", "Some legal text.")]
     prompt = build_prompt(fields, chunks)
     assert "citation" in prompt.lower()
-    assert "[UNSUPPORTED]" in prompt
+    assert "[NOT FOUND]" in prompt
 
 
 def test_prompt_contains_evidence_chunk():
@@ -42,7 +42,7 @@ def test_low_confidence_chunk_is_flagged():
     fields = {"doc-001": ExtractedFields()}
     chunks = [_make_chunk("doc-001-chunk-000", "Unclear text.", confidence=0.30)]
     evidence = _build_evidence_block(chunks)
-    assert "low_confidence" in evidence
+    assert "LOW_CONFIDENCE" in evidence
 
 
 def test_no_patterns_block_when_empty():

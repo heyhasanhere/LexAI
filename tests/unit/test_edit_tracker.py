@@ -2,24 +2,24 @@ import pytest
 from src.learning.edit_tracker import diff_drafts, _detect_section
 
 
-ORIGINAL = """# Case Fact Summary
+ORIGINAL = """PARTIES
 
-## Parties
 - Grantor: John Smith [doc-001, chunk-003]
 - Trustee: First National Bank [doc-001, chunk-003]
 
-## Key Dates
+KEY DATES
+
 - Recording date: March 15, 2019 [doc-001, chunk-007]
 - Maturity date: April 1, 2049 [doc-001, chunk-004]
 """
 
-SUBMITTED = """# Case Fact Summary
+SUBMITTED = """PARTIES
 
-## Parties
 - Grantor: Smith Family Trust, John Smith as Trustee [doc-001, chunk-003]
 - Trustee: First National Bank [doc-001, chunk-003]
 
-## Key Dates
+KEY DATES
+
 - Recording date: 2019-03-15 [doc-001, chunk-007]
 - Maturity date: April 1, 2049 [doc-001, chunk-004]
 """
@@ -55,7 +55,7 @@ def test_identical_drafts_produce_no_candidates():
 
 
 def test_section_detection_finds_nearest_header():
-    lines = ["## Parties\n", "- Grantor: John Smith\n"]
+    lines = ["PARTIES\n", "- Grantor: John Smith\n"]
     section = _detect_section(lines, 1)
     assert section == "parties"
 
