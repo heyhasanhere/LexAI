@@ -21,3 +21,6 @@ data/
 
 # OS
 .DS_Store
+
+# Project docs
+REQUIREMENTS.md

@@ -4,7 +4,7 @@
 
 llm:
   base_url: "http://localhost:8080/v1"  # vLLM OpenAI-compatible endpoint
-  model: "mistralai/Mistral-Small-3.1-24B-Instruct"
+  model: "Qwen/Qwen3-14B-AWQ"
   max_tokens: 4096
   api_key: "local"                      # vLLM requires a non-empty value; content is ignored
 
@@ -34,11 +34,11 @@ chunking:
 embedding:
   provider: "local"                     # local | openai
   local_model: "BAAI/bge-large-en-v1.5" # sentence-transformers model, runs on GPU
-  device: "cuda"                        # cuda | cpu
+  device: "cpu"                         # both GPUs fully occupied by vLLM tensor-parallel; insufficient free VRAM for BGE-large
   batch_size: 64                        # chunks per embedding batch
 
 retrieval:
-  top_k: 8                              # maximum chunks returned per draft request
+  top_k: 3                              # maximum chunks returned per draft request
   min_score: 0.35                       # cosine similarity below this → chunk excluded
   queries_per_draft:
     case_fact_summary:
