@@ -19,6 +19,17 @@ SUPPORTED_MIME_TYPES = {
     "text/plain",
 }
 
+_EXT_MIME: dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".tiff": "image/tiff",
+    ".tif": "image/tiff",
+    ".bmp": "image/bmp",
+    ".txt": "text/plain",
+}
+
 
 @dataclass
 class LoadedDocument:
@@ -29,6 +40,15 @@ class LoadedDocument:
     @property
     def full_text(self) -> str:
         return "\n\n".join(p.text for p in self.pages if p.text.strip())
+
+    @property
+    def page_annotated_text(self) -> str:
+        """Full text with [PAGE N] markers so the LLM can produce accurate page refs."""
+        parts = []
+        for p in self.pages:
+            if p.text.strip():
+                parts.append(f"[PAGE {p.page_number}]\n{p.text.strip()}")
+        return "\n\n".join(parts)
 
     @property
     def page_count(self) -> int:
@@ -49,8 +69,12 @@ def load_document(path: Path, ocr_kwargs: dict | None = None, dpi: int = 300) ->
     ocr_kwargs = ocr_kwargs or {}
     mime, _ = mimetypes.guess_type(str(path))
 
+    # Fall back to extension-based detection when mimetypes returns nothing useful
     if mime not in SUPPORTED_MIME_TYPES:
-        raise ValueError(f"Unsupported file type: {mime} ({path.name})")
+        mime = _EXT_MIME.get(Path(path).suffix.lower())
+
+    if not mime or mime not in SUPPORTED_MIME_TYPES:
+        raise ValueError(f"Unsupported file type: {Path(path).suffix!r} ({path.name})")
 
     if mime == "application/pdf":
         pdf_result: PDFResult = extract_pdf(path, dpi=dpi, ocr_kwargs=ocr_kwargs)
