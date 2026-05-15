@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 
 from openai import OpenAI
 
+from src.extraction.field_extractor import _vllm_extra
+
 from src.extraction.field_extractor import ExtractedFields
 from src.generation.prompts import build_prompt
 from src.retrieval.vector_store import RetrievedChunk
@@ -28,7 +30,8 @@ def generate_draft(
     chunks: list[RetrievedChunk],
     patterns: list[dict] | None = None,
     base_url: str = "http://localhost:8080/v1",
-    model: str = "mistralai/Mistral-Small-3.1-24B-Instruct",
+    model: str = "Qwen/Qwen3-14B-AWQ",
+    api_key: str = "local",
     temperature: float = 0.1,
     max_tokens: int = 2000,
     doc_meta: dict[str, dict] | None = None,
@@ -43,13 +46,13 @@ def generate_draft(
     patterns = patterns or []
     prompt = build_prompt(fields_by_doc, chunks, patterns, doc_meta=doc_meta)
 
-    client = OpenAI(base_url=base_url, api_key="local")
+    client = OpenAI(base_url=base_url, api_key=api_key)
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
         max_tokens=max_tokens,
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        extra_body=_vllm_extra(base_url),
     )
 
     draft_text = response.choices[0].message.content.strip()

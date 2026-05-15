@@ -1,3 +1,4 @@
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -52,19 +53,38 @@ logger = get_logger(__name__)
 
 app = FastAPI(title="LexAI", version="0.1.0")
 
-# ── Config — loaded from settings.yaml at import time ──────────────────────────
-_SETTINGS_PATH = Path(__file__).parent.parent.parent / "config" / "settings.yaml"
-try:
-    _cfg = yaml.safe_load(_SETTINGS_PATH.read_text())
-except FileNotFoundError:
-    logger.warning(f"settings.yaml not found at {_SETTINGS_PATH}, using defaults")
-    _cfg = {}
+# ── Config — settings.yaml with LD_* env-var overrides ────────────────────────
+# Any key in settings.yaml can be overridden at runtime with an env var using the
+# prefix LD_ and double-underscore nesting:  LD_LLM__BASE_URL → llm.base_url
+# This lets install.sh write a .env file without touching the YAML.
+
+def _load_config() -> dict:
+    path = Path(__file__).parent.parent.parent / "config" / "settings.yaml"
+    try:
+        cfg = yaml.safe_load(path.read_text())
+    except FileNotFoundError:
+        cfg = {}
+
+    for key, val in os.environ.items():
+        if not key.startswith("LD_"):
+            continue
+        parts = key[3:].lower().split("__")
+        node = cfg
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = val
+
+    return cfg
+
+
+_cfg = _load_config()
 
 DSN = _cfg.get("storage", {}).get("postgres_dsn", "postgresql://ld:ld@localhost:5432/lexai")
 CHROMA_HOST = _cfg.get("storage", {}).get("vector_store", {}).get("host", "localhost")
 CHROMA_PORT = _cfg.get("storage", {}).get("vector_store", {}).get("port", 8001)
 LLM_BASE_URL = _cfg.get("llm", {}).get("base_url", "http://localhost:8080/v1")
 LLM_MODEL = _cfg.get("llm", {}).get("model", "Qwen/Qwen3-14B-AWQ")
+LLM_API_KEY = _cfg.get("llm", {}).get("api_key", "local")
 EMBED_DEVICE = _cfg.get("embedding", {}).get("device", "cpu")
 DOCUMENT_DIR = Path(_cfg.get("storage", {}).get("document_dir", "./data/documents"))
 
@@ -144,6 +164,7 @@ def upload_document(
             loaded.page_annotated_text,
             base_url=LLM_BASE_URL,
             model=LLM_MODEL,
+            api_key=LLM_API_KEY,
         )
         if document_type_hint and not fields.document_type:
             fields.document_type = document_type_hint
@@ -250,6 +271,7 @@ def create_draft_endpoint(req: DraftRequest) -> DraftResponse:
             patterns=patterns,
             base_url=LLM_BASE_URL,
             model=LLM_MODEL,
+            api_key=LLM_API_KEY,
             doc_meta=doc_meta,
         )
     except ValueError as e:
@@ -318,7 +340,7 @@ def submit_draft_endpoint(draft_id: str, req: SubmitDraftRequest) -> SubmitDraft
     pattern_ids = []
     try:
         candidates = diff_drafts(row["original_text"], req.submitted_text)
-        classified = classify_edits(candidates, doc_type, base_url=LLM_BASE_URL, model=LLM_MODEL)
+        classified = classify_edits(candidates, doc_type, base_url=LLM_BASE_URL, model=LLM_MODEL, api_key=LLM_API_KEY)
         for edit in classified:
             pid = upsert_pattern(edit, doc_type, draft_id, DSN)
             pattern_ids.append(pid)

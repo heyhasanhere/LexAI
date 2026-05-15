@@ -1,7 +1,8 @@
+import os
 import streamlit as st
 import requests
 
-API = "http://localhost:8000"
+API = os.getenv("LEXAI_API_URL", "http://localhost:8000")
 FREQ_THRESHOLD = 3  # patterns below this are stored but not injected into prompts
 
 st.set_page_config(page_title="LexAI", layout="wide", initial_sidebar_state="expanded")

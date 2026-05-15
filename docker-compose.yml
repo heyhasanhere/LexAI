@@ -1,6 +1,98 @@
+# Profiles:
+#   lite  — OpenAI API or remote GPU  (no local vLLM, no NVIDIA required)
+#   full  — local Qwen3-14B on NVIDIA GPUs
+#
+# The installer writes .env and sets COMPOSE_PROFILES automatically.
+# Manual usage:
+#   COMPOSE_PROFILES=lite  docker compose up -d
+#   COMPOSE_PROFILES=full  docker compose up -d
+
 services:
+
+  # ── Backing stores (both profiles) ────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ld
+      POSTGRES_PASSWORD: ld
+      POSTGRES_DB: lexai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ld -d lexai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - ALLOW_RESET=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Application (both profiles) ───────────────────────────────────────────
+
+  api:
+    build: .
+    image: lexai-app
+    profiles: [lite, full]
+    ports:
+      - "8000:8000"
+    volumes:
+      - doc_data:/app/data/documents
+    env_file:
+      - .env
+    environment:
+      - LD_STORAGE__POSTGRES_DSN=postgresql://ld:ld@postgres:5432/lexai
+      - LD_STORAGE__VECTOR_STORE__HOST=chromadb
+    command: uvicorn src.api.routes:app --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  ui:
+    image: lexai-app
+    profiles: [lite, full]
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      - LEXAI_API_URL=http://api:8000
+    command: >
+      streamlit run src/ui/app.py
+      --server.port 8501
+      --server.address 0.0.0.0
+      --server.headless true
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ── Local GPU inference (full profile only) ────────────────────────────────
+
   vllm:
     image: vllm/vllm-openai:latest
+    profiles: [full]
     ports:
       - "8080:8000"
     volumes:
@@ -26,40 +118,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 120s            # model load takes time
-
-  chromadb:
-    image: chromadb/chroma:latest
-    ports:
-      - "8001:8000"
-    volumes:
-      - chroma_data:/chroma/chroma
-    environment:
-      - ALLOW_RESET=true
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  postgres:
-    image: postgres:16-alpine
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: ld
-      POSTGRES_PASSWORD: ld
-      POSTGRES_DB: lexai
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ld -d lexai"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      start_period: 120s
 
 volumes:
-  huggingface_cache:
-  chroma_data:
   postgres_data:
+  chroma_data:
+  doc_data:
+  huggingface_cache:

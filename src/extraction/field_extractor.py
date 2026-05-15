@@ -3,6 +3,15 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+
+def _vllm_extra(base_url: str) -> dict:
+    """Return extra_body for Qwen3 thinking suppression when talking to vLLM.
+    OpenAI's API rejects unknown extra_body fields, so we only send this for
+    non-OpenAI endpoints."""
+    if "openai.com" in base_url:
+        return {}
+    return {"chat_template_kwargs": {"enable_thinking": False}}
+
 from openai import OpenAI
 
 from src.utils.logger import get_logger
@@ -104,18 +113,19 @@ def extract_fields(
     text: str,
     base_url: str = "http://localhost:8080/v1",
     model: str = "Qwen/Qwen3-14B-AWQ",
+    api_key: str = "local",
     max_tokens: int = 4096,
     max_chunk_chars: int = 40000,
 ) -> ExtractedFields:
     chunks = _split_into_page_chunks(text, max_chunk_chars)
     if len(chunks) == 1:
-        return _extract_single(chunks[0], base_url, model, max_tokens)
+        return _extract_single(chunks[0], base_url, model, api_key, max_tokens)
 
     logger.info(f"Document split into {len(chunks)} chunk(s) for multi-turn extraction")
     results = []
     for i, chunk in enumerate(chunks):
         logger.info(f"Extracting chunk {i + 1}/{len(chunks)}")
-        results.append(_extract_single(chunk, base_url, model, max_tokens))
+        results.append(_extract_single(chunk, base_url, model, api_key, max_tokens))
 
     return _merge_fields(results)
 
@@ -144,9 +154,10 @@ def _extract_single(
     text: str,
     base_url: str,
     model: str,
+    api_key: str,
     max_tokens: int,
 ) -> ExtractedFields:
-    client = OpenAI(base_url=base_url, api_key="local")
+    client = OpenAI(base_url=base_url, api_key=api_key)
     prompt = EXTRACTION_PROMPT.format(text=text)
 
     try:
@@ -155,7 +166,7 @@ def _extract_single(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
             temperature=0.0,
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            extra_body=_vllm_extra(base_url),
         )
         raw = response.choices[0].message.content.strip()
 
