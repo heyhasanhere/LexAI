@@ -98,6 +98,14 @@ def get_document(document_id: str, dsn: str) -> dict | None:
             return dict(row) if row else None
 
 
+def delete_document(document_id: str, dsn: str) -> bool:
+    with _connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM drafts WHERE %s = ANY(document_ids)", (document_id,))
+            cur.execute("DELETE FROM documents WHERE document_id = %s", (document_id,))
+            return cur.rowcount > 0
+
+
 def list_documents(dsn: str, status: str | None = None, limit: int = 20, offset: int = 0) -> tuple[int, list[dict]]:
     with _connect(dsn) as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
