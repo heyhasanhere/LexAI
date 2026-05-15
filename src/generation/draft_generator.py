@@ -10,7 +10,8 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-CITATION_PATTERN = re.compile(r"\[([^,\]]+),\s*([^\]]+)\]")
+CITATION_PATTERN = re.compile(r"\[(doc-[a-f0-9]+),\s*(doc-[a-f0-9]+-chunk-\d+)\]")
+PAGE_REF_PATTERN = re.compile(r"\[p\.\d+\]")
 
 
 @dataclass
@@ -29,7 +30,8 @@ def generate_draft(
     base_url: str = "http://localhost:8080/v1",
     model: str = "mistralai/Mistral-Small-3.1-24B-Instruct",
     temperature: float = 0.1,
-    max_tokens: int = 4096,
+    max_tokens: int = 2000,
+    doc_meta: dict[str, dict] | None = None,
 ) -> GeneratedDraft:
     if not chunks:
         logger.error("No retrievable chunks — aborting generation to prevent hallucination")
@@ -39,7 +41,7 @@ def generate_draft(
         )
 
     patterns = patterns or []
-    prompt = build_prompt(fields_by_doc, chunks, patterns)
+    prompt = build_prompt(fields_by_doc, chunks, patterns, doc_meta=doc_meta)
 
     client = OpenAI(base_url=base_url, api_key="local")
     response = client.chat.completions.create(
@@ -47,9 +49,12 @@ def generate_draft(
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
         max_tokens=max_tokens,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
 
     draft_text = response.choices[0].message.content.strip()
+    if "<think>" in draft_text:
+        draft_text = draft_text.split("</think>")[-1].strip()
     ungrounded = _find_ungrounded_sentences(draft_text)
     citations = _extract_citations(draft_text)
     pattern_ids = [p["pattern_id"] for p in patterns if "pattern_id" in p]
@@ -71,12 +76,19 @@ def _find_ungrounded_sentences(text: str) -> list[str]:
     ungrounded = []
     for line in text.splitlines():
         line = line.strip()
-        if not line or line.startswith("#") or line.startswith("|") or line.startswith("-"):
+        if not line:
             continue
-        # Skip lines that are structural (headers, tables, list markers)
+        if line.startswith("#") or line.startswith("|") or line.startswith("─") or line.startswith("━"):
+            continue
         if len(line) < 20:
             continue
-        if not CITATION_PATTERN.search(line) and "[UNSUPPORTED]" not in line:
+        # Skip ALL CAPS section headers and format-hint lines
+        if line.isupper() or line.startswith("Overall:") or line.startswith("TYPE:") or line.startswith("DOCUMENT:"):
+            continue
+        has_citation = CITATION_PATTERN.search(line)
+        has_page_ref = PAGE_REF_PATTERN.search(line)
+        has_flag = "[NOT FOUND]" in line
+        if not has_citation and not has_page_ref and not has_flag:
             ungrounded.append(line)
     return ungrounded
 
