@@ -9,7 +9,8 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-SECTION_HEADER = re.compile(r"^#{1,3}\s+(.+)$", re.MULTILINE)
+# Matches ALL CAPS plain-text section headers used in the draft output (e.g. "PARTIES", "KEY DATES")
+SECTION_HEADER = re.compile(r"^([A-Z][A-Z &/]+(?:\s*/\s*[A-Z &/]+)?)$")
 
 CLASSIFY_PROMPT = """You are reviewing an operator's edit to a legal document draft.
 
@@ -114,8 +115,11 @@ def classify_edits(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_tokens=256,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
             raw = response.choices[0].message.content.strip()
+            if "<think>" in raw:
+                raw = raw.split("</think>")[-1].strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
@@ -148,5 +152,5 @@ def _detect_section(lines: list[str], line_index: int) -> str:
     for i in range(line_index, -1, -1):
         match = SECTION_HEADER.match(lines[i].rstrip())
         if match:
-            return match.group(1).strip().lower().replace(" ", "_")
+            return match.group(1).strip().lower().replace(" ", "_").replace("/", "_")
     return "unknown"
