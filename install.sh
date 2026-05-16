@@ -13,7 +13,7 @@ exec 3</dev/tty
 REPO_URL="https://github.com/heyhasanhere/LexAI.git"
 INSTALL_DIR="${LEXAI_DIR:-$HOME/lexai}"
 LEXAI_REMOTE_URL="${LEXAI_REMOTE_URL:-}"       # set by operator via serve.sh; empty = ask at prompt
-LEXAI_REMOTE_MODEL="Qwen/Qwen3-14B-AWQ"
+LEXAI_REMOTE_MODEL="Qwen/Qwen3-4B-AWQ"
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -121,29 +121,86 @@ choose_mode() {
     echo ""
     _bold "How do you want to run the LLM?"
     echo ""
-    echo "  1) OpenAI API          — uses your own OpenAI key (GPT-4o-mini by default)"
-    echo "  2) LexAI remote GPU    — free, rate-limited Qwen3-14B hosted by the operator"
-    echo "  3) Local GPU           — run Qwen3-14B locally (requires NVIDIA GPU with 24 GB VRAM)"
+    echo "  Free cloud (no GPU needed):"
+    echo "  1) Groq          — free tier, llama-3.1-8b-instant (fastest)"
+    echo "  2) OpenRouter    — free models (llama-3.1-8b, gemma-3, qwen3 etc.)"
+    echo "  3) Google Gemini — free tier, gemini-2.0-flash-lite"
+    echo "  4) Mistral       — free tier, mistral-small-latest"
     echo ""
-    printf 'Enter choice [1/2/3]: '
+    echo "  Paid cloud:"
+    echo "  5) OpenAI        — your key, gpt-4o-mini"
+    echo ""
+    echo "  Self-hosted:"
+    echo "  6) LexAI remote GPU — free, rate-limited Qwen3-4B hosted by the operator"
+    echo "  7) Local GPU        — run Qwen3-4B on your own NVIDIA GPU (~5 GB VRAM)"
+    echo ""
+    printf 'Enter choice [1-7]: '
     read -r MODE_CHOICE <&3
+
+    HF_TOKEN=""
 
     case "$MODE_CHOICE" in
         1)
             echo ""
-            printf 'OpenAI API key (sk-…): '
-            read -r OPENAI_KEY <&3
-            [[ -z "$OPENAI_KEY" ]] && _die "API key cannot be empty."
-            printf 'Model [gpt-4o-mini]: '
-            read -r OPENAI_MODEL <&3
-            OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o-mini}"
-
-            LLM_BASE_URL="https://api.openai.com/v1"
-            LLM_MODEL="$OPENAI_MODEL"
-            LLM_API_KEY="$OPENAI_KEY"
+            printf 'Groq API key (get one free at console.groq.com): '
+            read -r LLM_API_KEY <&3
+            [[ -z "$LLM_API_KEY" ]] && _die "API key cannot be empty."
+            printf 'Model [llama-3.1-8b-instant]: '
+            read -r _M <&3
+            LLM_PROVIDER="groq"
+            LLM_BASE_URL="https://api.groq.com/openai/v1"
+            LLM_MODEL="${_M:-llama-3.1-8b-instant}"
             COMPOSE_PROFILES="lite"
             ;;
         2)
+            echo ""
+            printf 'OpenRouter API key (get one free at openrouter.ai): '
+            read -r LLM_API_KEY <&3
+            [[ -z "$LLM_API_KEY" ]] && _die "API key cannot be empty."
+            printf 'Model [meta-llama/llama-3.1-8b-instruct:free]: '
+            read -r _M <&3
+            LLM_PROVIDER="openrouter"
+            LLM_BASE_URL="https://openrouter.ai/api/v1"
+            LLM_MODEL="${_M:-meta-llama/llama-3.1-8b-instruct:free}"
+            COMPOSE_PROFILES="lite"
+            ;;
+        3)
+            echo ""
+            printf 'Google AI Studio API key (get one free at aistudio.google.com): '
+            read -r LLM_API_KEY <&3
+            [[ -z "$LLM_API_KEY" ]] && _die "API key cannot be empty."
+            printf 'Model [gemini-2.0-flash-lite]: '
+            read -r _M <&3
+            LLM_PROVIDER="gemini"
+            LLM_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai/"
+            LLM_MODEL="${_M:-gemini-2.0-flash-lite}"
+            COMPOSE_PROFILES="lite"
+            ;;
+        4)
+            echo ""
+            printf 'Mistral API key (get one free at console.mistral.ai): '
+            read -r LLM_API_KEY <&3
+            [[ -z "$LLM_API_KEY" ]] && _die "API key cannot be empty."
+            printf 'Model [mistral-small-latest]: '
+            read -r _M <&3
+            LLM_PROVIDER="mistral"
+            LLM_BASE_URL="https://api.mistral.ai/v1"
+            LLM_MODEL="${_M:-mistral-small-latest}"
+            COMPOSE_PROFILES="lite"
+            ;;
+        5)
+            echo ""
+            printf 'OpenAI API key (sk-…): '
+            read -r LLM_API_KEY <&3
+            [[ -z "$LLM_API_KEY" ]] && _die "API key cannot be empty."
+            printf 'Model [gpt-4o-mini]: '
+            read -r _M <&3
+            LLM_PROVIDER="openai"
+            LLM_BASE_URL="https://api.openai.com/v1"
+            LLM_MODEL="${_M:-gpt-4o-mini}"
+            COMPOSE_PROFILES="lite"
+            ;;
+        6)
             echo ""
             if [[ -z "$LEXAI_REMOTE_URL" ]]; then
                 printf 'Remote GPU URL (ask the operator running serve.sh): '
@@ -151,27 +208,27 @@ choose_mode() {
                 [[ -z "$LEXAI_REMOTE_URL" ]] && _die "Remote URL cannot be empty."
             fi
             _yellow "Using remote GPU at: $LEXAI_REMOTE_URL"
-
-
+            LLM_PROVIDER="vllm"
             LLM_BASE_URL="$LEXAI_REMOTE_URL"
             LLM_MODEL="$LEXAI_REMOTE_MODEL"
-            LLM_API_KEY="lexai-public"   # accepted by the gateway; not a secret
+            LLM_API_KEY="lexai-public"
             COMPOSE_PROFILES="lite"
             ;;
-        3)
+        7)
             echo ""
             _yellow "Checking for NVIDIA GPU…"
             command -v nvidia-smi &>/dev/null || _die "nvidia-smi not found. Install NVIDIA drivers first."
             VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | awk '{s+=$1} END {print s}')
             _green "Total VRAM: ${VRAM} MiB across $(nvidia-smi --list-gpus | wc -l) GPU(s)"
-            (( VRAM < 20000 )) && _yellow "Warning: Qwen3-14B-AWQ needs ~20 GB VRAM. Detected ${VRAM} MiB."
+            (( VRAM < 5000 )) && _yellow "Warning: Qwen3-4B-AWQ needs ~5 GB VRAM. Detected ${VRAM} MiB."
 
+            LLM_PROVIDER="vllm"
             LLM_BASE_URL="http://vllm:8000/v1"
-            LLM_MODEL="Qwen/Qwen3-14B-AWQ"
+            LLM_MODEL="Qwen/Qwen3-4B-AWQ"
             LLM_API_KEY="local"
             COMPOSE_PROFILES="full"
 
-            printf 'HuggingFace token (optional, speeds downloads) [skip]: '
+            printf 'HuggingFace token (optional, speeds up model download) [skip]: '
             read -r HF_TOKEN <&3
             HF_TOKEN="${HF_TOKEN:-}"
             ;;
@@ -186,6 +243,7 @@ write_env() {
 # Generated by install.sh on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 COMPOSE_PROFILES=${COMPOSE_PROFILES}
 
+LD_LLM__PROVIDER=${LLM_PROVIDER}
 LD_LLM__BASE_URL=${LLM_BASE_URL}
 LD_LLM__MODEL=${LLM_MODEL}
 LD_LLM__API_KEY=${LLM_API_KEY}

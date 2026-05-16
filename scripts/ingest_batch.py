@@ -24,9 +24,7 @@ logger = get_logger("ingest_batch")
 
 DSN = "postgresql://ld:ld@localhost:5432/lexai"
 LLM_BASE_URL = "http://localhost:8080/v1"
-LLM_MODEL = "Qwen/Qwen3-14B-AWQ"
-CHROMA_HOST = "localhost"
-CHROMA_PORT = 8001
+LLM_MODEL = "Qwen/Qwen3-4B-AWQ"
 EMBED_DEVICE = "cuda"
 
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".txt"}
@@ -48,7 +46,7 @@ def ingest_file(path: Path) -> str | None:
         fields = extract_fields(loaded.page_annotated_text, base_url=LLM_BASE_URL, model=LLM_MODEL)
         pages = [(p.page_number, p.text, p.ocr_confidence) for p in loaded.pages]
         chunks = chunk_document(document_id, pages)
-        upsert_chunks(chunks, device=EMBED_DEVICE, host=CHROMA_HOST, port=CHROMA_PORT)
+        upsert_chunks(chunks, device=EMBED_DEVICE, dsn=DSN)
 
         update_document(
             document_id,

@@ -1,19 +1,35 @@
 #!/usr/bin/env bash
 # Operator script — expose LexAI publicly from your own machine.
-# Prerequisites: docker compose already up (full profile).
 #
 # Usage:
-#   bash scripts/serve.sh
+#   bash scripts/serve.sh           # auto-detect profile from COMPOSE_PROFILES env var
+#   bash scripts/serve.sh lite      # UI tunnel only (Groq / OpenAI / remote GPU backend)
+#   bash scripts/serve.sh full      # UI tunnel + GPU gateway tunnel
 #
-# Starts two Cloudflare Quick Tunnels:
-#   UI tunnel  (port 8501) → share this URL so users open LexAI in their browser
-#   GPU tunnel (port 8090) → paste into install.sh as LEXAI_REMOTE_URL
+# Lite profile (default when COMPOSE_PROFILES=lite):
+#   Starts one Cloudflare Quick Tunnel for the Streamlit UI.
 #
-# Press Ctrl-C to stop both tunnels.
+# Full profile (COMPOSE_PROFILES=full):
+#   Starts two Cloudflare Quick Tunnels:
+#     UI tunnel  (port 8501) → share this URL so users open LexAI in their browser
+#     GPU tunnel (port 8090) → paste into install.sh as LEXAI_REMOTE_URL
+#
+# Press Ctrl-C to stop tunnels.
 set -euo pipefail
 
 UI_PORT=8501
 GATEWAY_PORT=8090
+
+# Determine profile: explicit arg > COMPOSE_PROFILES env > default lite
+if [[ "${1:-}" == "full" ]]; then
+    PROFILE="full"
+elif [[ "${1:-}" == "lite" ]]; then
+    PROFILE="lite"
+elif [[ "${COMPOSE_PROFILES:-}" == "full" ]]; then
+    PROFILE="full"
+else
+    PROFILE="lite"
+fi
 
 _green()  { printf '\033[0;32m%s\033[0m\n' "$*"; }
 _yellow() { printf '\033[0;33m%s\033[0m\n' "$*"; }
@@ -23,18 +39,20 @@ _die()    { printf '\033[0;31mERROR: %s\033[0m\n' "$*"; exit 1; }
 # ── Verify services are up ─────────────────────────────────────────────────
 
 echo ""
-_bold "Checking services…"
+_bold "Checking services (profile: $PROFILE)…"
 
 curl -sf --max-time 5 "http://localhost:$UI_PORT" -o /dev/null \
     || _die "Streamlit UI not responding on port $UI_PORT. Run: docker compose up -d"
 _green "✓ UI is up (port $UI_PORT)"
 
-# Gateway returns 403 on / — that is correct behaviour
-HTTP=$(curl -sf --max-time 5 -o /dev/null -w "%{http_code}" \
-    "http://localhost:$GATEWAY_PORT/" 2>/dev/null || echo "000")
-[[ "$HTTP" == "403" ]] \
-    || _die "nginx gateway not responding on port $GATEWAY_PORT. Run: docker compose up -d (full profile)"
-_green "✓ vLLM gateway is up (port $GATEWAY_PORT)"
+if [[ "$PROFILE" == "full" ]]; then
+    # Gateway returns 403 on / — that is correct behaviour
+    HTTP=$(curl -sf --max-time 5 -o /dev/null -w "%{http_code}" \
+        "http://localhost:$GATEWAY_PORT/" 2>/dev/null || echo "000")
+    [[ "$HTTP" == "403" ]] \
+        || _die "nginx gateway not responding on port $GATEWAY_PORT. Run: COMPOSE_PROFILES=full docker compose up -d"
+    _green "✓ vLLM gateway is up (port $GATEWAY_PORT)"
+fi
 
 # ── Install cloudflared ────────────────────────────────────────────────────
 
@@ -96,7 +114,7 @@ parse_tunnel() {
     done
 }
 
-# ── Start both tunnels ─────────────────────────────────────────────────────
+# ── Start tunnels ──────────────────────────────────────────────────────────
 
 echo ""
 _bold "Starting tunnels (Ctrl-C to stop)…"
@@ -107,12 +125,14 @@ cloudflared tunnel --url "http://localhost:$UI_PORT" 2>&1 \
     | parse_tunnel "UI" &
 UI_PID=$!
 
-# Tunnel for vLLM gateway
-cloudflared tunnel --url "http://localhost:$GATEWAY_PORT" 2>&1 \
-    | parse_tunnel "GPU" &
-GPU_PID=$!
-
-# Clean up both tunnels on Ctrl-C
-trap 'kill $UI_PID $GPU_PID 2>/dev/null; echo ""; _yellow "Tunnels stopped."; exit 0' INT TERM
-
-wait $UI_PID $GPU_PID
+if [[ "$PROFILE" == "full" ]]; then
+    # Tunnel for vLLM gateway
+    cloudflared tunnel --url "http://localhost:$GATEWAY_PORT" 2>&1 \
+        | parse_tunnel "GPU" &
+    GPU_PID=$!
+    trap 'kill $UI_PID $GPU_PID 2>/dev/null; echo ""; _yellow "Tunnels stopped."; exit 0' INT TERM
+    wait $UI_PID $GPU_PID
+else
+    trap 'kill $UI_PID 2>/dev/null; echo ""; _yellow "Tunnel stopped."; exit 0' INT TERM
+    wait $UI_PID
+fi

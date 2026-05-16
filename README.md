@@ -98,7 +98,7 @@ HF_TOKEN=          # optional — speeds up model download from HuggingFace
 docker compose up -d
 ```
 
-This starts: Postgres, ChromaDB, vLLM (loads the model into GPU memory), nginx gateway, FastAPI, and Streamlit.
+This starts: Postgres (with pgvector), vLLM (loads the model into GPU memory), nginx gateway, FastAPI, and Streamlit.
 
 First start takes 5–15 minutes while vLLM downloads and loads the model. Monitor with:
 
@@ -157,8 +157,7 @@ Streamlit UI (port 8501)
   │  HTTP (internal Docker network)
   ▼
 FastAPI (port 8000)
-  ├── Postgres           — documents, drafts, edit_patterns
-  ├── ChromaDB           — chunk embeddings (BGE-large-en-v1.5)
+  ├── Postgres + pgvector — documents, drafts, edit_patterns, chunk embeddings (BGE-large-en-v1.5)
   └── LLM backend
         ├── OpenAI API          (lite profile, option 1)
         ├── Remote vLLM         (lite profile, option 2 — via Cloudflare tunnel)
@@ -173,10 +172,10 @@ Public access (operator only, full profile):
 ### Data flows
 
 **Document ingestion** (`POST /documents`)  
-File → MIME detection → pdfminer.six (native PDFs) or Tesseract OCR (scanned/image) or HTML tag stripping → page-annotated text → LLM field extraction → sentence chunking with overlap → BGE embedding → ChromaDB upsert + Postgres row.
+File → MIME detection → PyMuPDF (native PDFs) or Marker OCR (scanned/image) or HTML tag stripping → page-annotated text → LLM field extraction → sentence chunking with overlap → BGE embedding → pgvector upsert + Postgres row.
 
 **Draft generation** (`POST /drafts`)  
-Semantic queries → ChromaDB top-k retrieval → load generalizable edit patterns from Postgres (filtered by document type and section) → build prompt with extracted fields, retrieved chunks, and prior edit patterns → LLM call → citation parsing → ungrounded sentence detection → return draft. Generation aborts with an error if zero chunks are retrieved (intentional hallucination prevention).
+Semantic queries → pgvector top-k retrieval → load generalizable edit patterns from Postgres (filtered by document type and section) → build prompt with extracted fields, retrieved chunks, and prior edit patterns → LLM call → citation parsing → ungrounded sentence detection → return draft. Generation aborts with an error if zero chunks are retrieved (intentional hallucination prevention).
 
 **Edit learning** (`POST /drafts/{id}/submit`)  
 Operator submits corrected draft text → difflib line-level diff against original → LLM classifies each changed hunk (edit type, when to apply, whether generalizable) → only edits marked `generalizable=true` stored in the `edit_patterns` Postgres table → patterns that meet the frequency threshold are injected as few-shot examples into future generation prompts.
@@ -187,7 +186,7 @@ Operator submits corrected draft text → difflib line-level diff against origin
 
 ```bash
 # Install system dependencies (Ubuntu)
-sudo apt-get install -y tesseract-ocr tesseract-ocr-eng poppler-utils libpq-dev
+sudo apt-get install -y libpq-dev libgl1
 
 # Create virtualenv and install Python dependencies
 python -m venv .venv
@@ -195,9 +194,9 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Start only the backing services
-docker compose up -d postgres chromadb
+docker compose up -d postgres
 # To include local GPU inference:
-# COMPOSE_PROFILES=full docker compose up -d postgres chromadb vllm gateway
+# COMPOSE_PROFILES=full docker compose up -d postgres vllm gateway
 
 # Start API with auto-reload
 uvicorn src.api.routes:app --host 0.0.0.0 --port 8000 --reload
@@ -255,7 +254,7 @@ Runs `docker compose build api`. Builds a single `lexai-app` image used by both 
 **Step 8 — Start services**  
 Runs `docker compose up -d`. Which services start depends on `COMPOSE_PROFILES`:
 
-- `lite` — Postgres, ChromaDB, FastAPI, Streamlit (no local GPU)
+- `lite` — Postgres (with pgvector), FastAPI, Streamlit (no local GPU)
 - `full` — everything above plus vLLM and the nginx rate-limiting gateway
 
 **Step 9 — Health check**  
@@ -347,9 +346,7 @@ Config is loaded from `config/settings.yaml`. Any key can be overridden with an 
 | `LD_LLM__MODEL` | `llm.model` | `Qwen/Qwen3-14B-AWQ` | Model name sent in API requests |
 | `LD_LLM__API_KEY` | `llm.api_key` | `local` | API key (`sk-...` for OpenAI) |
 | `LD_LLM__MAX_TOKENS` | `llm.max_tokens` | `4096` | Max tokens in LLM responses |
-| `LD_STORAGE__POSTGRES_DSN` | `storage.postgres_dsn` | *(set in .env)* | Postgres connection string |
-| `LD_STORAGE__VECTOR_STORE__HOST` | `storage.vector_store.host` | `localhost` | ChromaDB host |
-| `LD_STORAGE__VECTOR_STORE__PORT` | `storage.vector_store.port` | `8001` | ChromaDB port |
+| `LD_STORAGE__POSTGRES_DSN` | `storage.postgres_dsn` | *(set in .env)* | Postgres connection string (pgvector is in the same DB) |
 | `LD_EMBEDDING__MODEL` | `embedding.model` | `BAAI/bge-large-en-v1.5` | Sentence-transformers model |
 | `LD_EMBEDDING__DEVICE` | `embedding.device` | `auto` | `auto`, `cpu`, or `cuda:N`. `auto` picks the GPU with the most free VRAM if CUDA is available, else CPU. |
 
