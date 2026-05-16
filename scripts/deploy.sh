@@ -122,11 +122,12 @@ echo ""
 
 _yellow "Updating README.md with new live URL…"
 
-if grep -q "<!-- live-demo -->" "$README"; then
-    sed -i "s|<!-- live-demo -->.*|<!-- live-demo --> **[▶ Open Live Demo]($LIVE_URL)**|" "$README"
+if grep -q "live-demo-url:" "$README"; then
+    # Replace the entire live-demo blockquote line
+    sed -i "s|> \*\*\[▶ Open Live Demo\]([^)]*)\*\*.*|> **[▶ Open Live Demo]($LIVE_URL)** <!-- live-demo-url: $LIVE_URL -->|" "$README"
 else
     # Insert after the first H1 line
-    sed -i "0,/^# /{s|^# \(.*\)|# \1\n\n<!-- live-demo --> **[▶ Open Live Demo]($LIVE_URL)**|}" "$README"
+    sed -i "0,/^# /{s|^# \(.*\)|# \1\n\n> **[▶ Open Live Demo]($LIVE_URL)** <!-- live-demo-url: $LIVE_URL -->|}" "$README"
 fi
 
 _green "✓ README.md updated"

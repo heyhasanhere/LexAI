@@ -1,6 +1,6 @@
 # LexAI — Legal Document Analysis Platform
 
-<!-- live-demo --> **[▶ Open Live Demo](https://billing-madrid-generates-profit.trycloudflare.com)**
+> **[▶ Open Live Demo](https://billing-madrid-generates-profit.trycloudflare.com)** <!-- live-demo-url: https://billing-madrid-generates-profit.trycloudflare.com -->
 
 LexAI ingests legal documents, extracts structured fields via LLM, retrieves relevant precedents from a vector store, generates grounded draft summaries with inline citations, and learns from operator edits to improve future drafts.
 
