@@ -39,7 +39,8 @@ embedding:
 
 retrieval:
   top_k: 3                              # maximum chunks returned per draft request
-  min_score: 0.35                       # cosine similarity below this → chunk excluded
+  min_score: 0.35                       # cosine similarity below this → chunk excluded in draft generation
+  evidence_min_score: 0.25              # looser threshold for the evidence display endpoint
   queries_per_draft:
     case_fact_summary:
       - "parties grantor grantee trustee beneficiary"

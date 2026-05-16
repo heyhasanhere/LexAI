@@ -69,7 +69,12 @@ class LoadedDocument:
         return flags
 
 
-def load_document(path: Path, ocr_kwargs: dict | None = None, dpi: int = 300) -> LoadedDocument:
+def load_document(
+    path: Path,
+    ocr_kwargs: dict | None = None,
+    dpi: int = 300,
+    image_only_threshold: int = 100,
+) -> LoadedDocument:
     ocr_kwargs = ocr_kwargs or {}
     mime, _ = mimetypes.guess_type(str(path))
 
@@ -81,7 +86,7 @@ def load_document(path: Path, ocr_kwargs: dict | None = None, dpi: int = 300) ->
         raise ValueError(f"Unsupported file type: {Path(path).suffix!r} ({path.name})")
 
     if mime == "application/pdf":
-        pdf_result: PDFResult = extract_pdf(path, dpi=dpi, ocr_kwargs=ocr_kwargs)
+        pdf_result: PDFResult = extract_pdf(path, dpi=dpi, image_only_threshold=image_only_threshold, ocr_kwargs=ocr_kwargs)
         return LoadedDocument(path=path, file_type="pdf", pages=pdf_result.pages)
 
     if mime and mime.startswith("image/"):
