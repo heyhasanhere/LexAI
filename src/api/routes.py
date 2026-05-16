@@ -85,8 +85,10 @@ CHROMA_PORT = _cfg.get("storage", {}).get("vector_store", {}).get("port", 8001)
 LLM_BASE_URL = _cfg.get("llm", {}).get("base_url", "http://localhost:8080/v1")
 LLM_MODEL = _cfg.get("llm", {}).get("model", "Qwen/Qwen3-14B-AWQ")
 LLM_API_KEY = _cfg.get("llm", {}).get("api_key", "local")
-EMBED_DEVICE = _cfg.get("embedding", {}).get("device", "cpu")
+LLM_MAX_TOKENS = int(_cfg.get("llm", {}).get("max_tokens", 2000))
+EMBED_DEVICE = _cfg.get("embedding", {}).get("device", "auto")
 DOCUMENT_DIR = Path(_cfg.get("storage", {}).get("document_dir", "./data/documents"))
+MAX_UPLOAD_BYTES = int(_cfg.get("server", {}).get("max_upload_size_mb", 50)) * 1024 * 1024
 
 _RETRIEVAL_QUERIES: list[str] = (
     _cfg.get("retrieval", {}).get("queries_per_draft", {}).get("case_fact_summary")
@@ -150,7 +152,13 @@ def upload_document(
     document_id = create_document(file.filename, _file_type(file.filename), DSN)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
+        data = file.file.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds the {MAX_UPLOAD_BYTES // (1024*1024)} MB upload limit.",
+            )
+        tmp.write(data)
         tmp_path = Path(tmp.name)
 
     try:
@@ -272,6 +280,7 @@ def create_draft_endpoint(req: DraftRequest) -> DraftResponse:
             base_url=LLM_BASE_URL,
             model=LLM_MODEL,
             api_key=LLM_API_KEY,
+            max_tokens=LLM_MAX_TOKENS,
             doc_meta=doc_meta,
         )
     except ValueError as e:
