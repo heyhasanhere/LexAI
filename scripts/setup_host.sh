@@ -14,6 +14,15 @@ else
     echo "Docker already installed: $(docker --version)"
 fi
 
+# Verify docker compose v2 plugin (not standalone docker-compose v1)
+if ! docker compose version &>/dev/null; then
+    echo "ERROR: 'docker compose' (v2 plugin) is required but not found."
+    echo "If you have 'docker-compose' (v1), uninstall it and install the Docker Engine compose plugin:"
+    echo "  sudo apt-get install docker-compose-plugin"
+    exit 1
+fi
+echo "Docker Compose: $(docker compose version --short)"
+
 # --- NVIDIA Container Toolkit ---
 if ! dpkg -s nvidia-container-toolkit &>/dev/null; then
     echo "Installing NVIDIA Container Toolkit..."

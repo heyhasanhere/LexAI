@@ -54,8 +54,8 @@ After installation:
 | FastAPI (REST) | http://localhost:8000 |
 | API docs (Swagger) | http://localhost:8000/docs |
 
-To stop: `docker compose -C ~/lexai down`  
-To restart: `docker compose -C ~/lexai up -d`
+To stop: `docker compose --project-directory ~/lexai down`  
+To restart: `docker compose --project-directory ~/lexai up -d`
 
 ---
 
@@ -65,7 +65,7 @@ To restart: `docker compose -C ~/lexai up -d`
 
 | Requirement | Notes |
 |---|---|
-| Linux host | Ubuntu 22.04+ recommended |
+| Linux host | Ubuntu 22.04+ recommended. **macOS is not supported for the `full` profile** — Docker on macOS does not support NVIDIA GPU passthrough. |
 | NVIDIA GPU(s) | 24 GB VRAM total minimum for Qwen3-14B-AWQ |
 | NVIDIA drivers | Run `nvidia-smi` to verify |
 | A domain name | Point an A record at your server's IP (used for a stable URL in `install.sh`) |
@@ -264,7 +264,7 @@ Public access (operator only, full profile):
 ### Data flows
 
 **Document ingestion** (`POST /documents`)  
-File → MIME detection → pdfminer.six (native PDFs) or Tesseract OCR (scanned/image) → page-annotated text with `[PAGE N]` markers → LLM field extraction (chunked at `[PAGE N]` boundaries if text exceeds 40,000 chars) → sentence chunking with overlap → BGE embedding → ChromaDB upsert + Postgres row.
+File → MIME detection → pdfminer.six (native PDFs) or Tesseract OCR (scanned/image) or HTML tag stripping → page-annotated text with `[PAGE N]` markers → LLM field extraction (chunked at `[PAGE N]` boundaries if text exceeds 28,000 chars) → sentence chunking with overlap → BGE embedding → ChromaDB upsert + Postgres row.
 
 **Draft generation** (`POST /drafts`)  
 4 fixed semantic queries → ChromaDB top-k retrieval → load generalizable edit patterns from Postgres (filtered by document type and section) → build prompt with extracted fields, retrieved chunks, and prior edit patterns → LLM call → citation parsing (`[doc_id, chunk_id]` format) → ungrounded sentence detection → return draft. Generation aborts with an error if zero chunks are retrieved (intentional hallucination prevention).
@@ -304,9 +304,9 @@ Config is loaded from `config/settings.yaml`. Any key can be overridden with an 
 | `LD_STORAGE__VECTOR_STORE__HOST` | `storage.vector_store.host` | `localhost` | ChromaDB host |
 | `LD_STORAGE__VECTOR_STORE__PORT` | `storage.vector_store.port` | `8001` | ChromaDB port |
 | `LD_EMBEDDING__MODEL` | `embedding.model` | `BAAI/bge-large-en-v1.5` | Sentence-transformers model |
-| `LD_EMBEDDING__DEVICE` | `embedding.device` | `cpu` | `cpu` or `cuda:N` — see note below |
+| `LD_EMBEDDING__DEVICE` | `embedding.device` | `auto` | `auto`, `cpu`, or `cuda:N`. `auto` picks the GPU with the most free VRAM if CUDA is available, else CPU. |
 
-> **Embedding device:** When running the `full` profile, vLLM pre-allocates 80% of each GPU's VRAM (9.6 GB per card). BGE-large-en-v1.5 requires ~1.34 GB and cannot fit in the remaining headroom. The embedding model therefore runs on CPU by default. If you have a third GPU or want to use CPU for vLLM, you can set `LD_EMBEDDING__DEVICE=cuda:0`.
+> **Embedding device:** Default is `auto`. When CUDA is available the model (BGE-large-en-v1.5, ~670 MiB in float16) is loaded on the GPU with the most free VRAM. vLLM's `gpu_memory_utilization 0.70` leaves roughly 2 GB free per card, which is sufficient. Force CPU with `LD_EMBEDDING__DEVICE=cpu`.
 
 ---
 
