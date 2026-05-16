@@ -1,5 +1,7 @@
 -- Runs automatically when the Postgres container starts (docker-compose mounts this file).
 
+CREATE EXTENSION IF NOT EXISTS vector;
+
 CREATE TABLE IF NOT EXISTS documents (
     document_id      TEXT PRIMARY KEY,
     filename         TEXT NOT NULL,
@@ -41,3 +43,19 @@ CREATE TABLE IF NOT EXISTS edit_patterns (
 
 CREATE INDEX IF NOT EXISTS idx_edit_patterns_lookup
     ON edit_patterns (document_type, section, edit_type);
+
+CREATE TABLE IF NOT EXISTS chunks (
+    chunk_id       TEXT PRIMARY KEY,
+    document_id    TEXT NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+    page_number    INTEGER NOT NULL,
+    chunk_index    INTEGER NOT NULL,
+    char_start     INTEGER NOT NULL,
+    char_end       INTEGER NOT NULL,
+    ocr_confidence FLOAT NOT NULL DEFAULT 1.0,
+    token_count    INTEGER NOT NULL DEFAULT 0,
+    text           TEXT NOT NULL,
+    embedding      vector(1024)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks (document_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING hnsw (embedding vector_cosine_ops);

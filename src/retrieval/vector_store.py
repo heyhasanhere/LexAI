@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 
-import chromadb
-from chromadb.config import Settings
+import numpy as np
+import psycopg2
+import psycopg2.extras
+from pgvector.psycopg2 import register_vector
 
 from src.extraction.chunker import Chunk
 from src.retrieval.embedder import embed
@@ -9,22 +11,13 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-COLLECTION_NAME = "lexai_chunks"
+EMBED_DIM = 1024  # BAAI/bge-large-en-v1.5 output dimension
 
 
-def _get_client(host: str = "localhost", port: int = 8001) -> chromadb.HttpClient:
-    return chromadb.HttpClient(
-        host=host,
-        port=port,
-        settings=Settings(anonymized_telemetry=False),
-    )
-
-
-def _get_collection(client: chromadb.HttpClient) -> chromadb.Collection:
-    return client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"},
-    )
+def _conn(dsn: str):
+    conn = psycopg2.connect(dsn)
+    register_vector(conn)
+    return conn
 
 
 @dataclass
@@ -42,45 +35,47 @@ def upsert_chunks(
     chunks: list[Chunk],
     device: str = "cuda",
     batch_size: int = 64,
-    host: str = "localhost",
-    port: int = 8001,
+    dsn: str = "postgresql://ld:ld@localhost:5432/lexai",
 ) -> None:
     if not chunks:
         return
 
-    client = _get_client(host, port)
-    collection = _get_collection(client)
-
     texts = [c.text for c in chunks]
     vectors = embed(texts, device=device, batch_size=batch_size)
 
-    collection.upsert(
-        ids=[c.chunk_id for c in chunks],
-        embeddings=vectors,
-        documents=texts,
-        metadatas=[
-            {
-                "document_id": c.document_id,
-                "page_number": c.page_number,
-                "chunk_index": c.chunk_index,
-                "char_start": c.char_start,
-                "char_end": c.char_end,
-                "ocr_confidence": c.ocr_confidence,
-                "token_count": c.token_count,
-            }
-            for c in chunks
-        ],
-    )
-    logger.info(f"Upserted {len(chunks)} chunks into vector store")
+    with _conn(dsn) as conn:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_batch(
+                cur,
+                """
+                INSERT INTO chunks
+                    (chunk_id, document_id, page_number, chunk_index,
+                     char_start, char_end, ocr_confidence, token_count, text, embedding)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (chunk_id) DO UPDATE SET
+                    text = EXCLUDED.text,
+                    embedding = EXCLUDED.embedding
+                """,
+                [
+                    (
+                        c.chunk_id, c.document_id, c.page_number, c.chunk_index,
+                        c.char_start, c.char_end, c.ocr_confidence, c.token_count,
+                        c.text, np.array(v, dtype=np.float32),
+                    )
+                    for c, v in zip(chunks, vectors)
+                ],
+            )
+    logger.info(f"Upserted {len(chunks)} chunks into pgvector")
 
 
-def delete_by_document(document_id: str, host: str = "localhost", port: int = 8001) -> int:
-    client = _get_client(host, port)
-    collection = _get_collection(client)
-    result = collection.get(where={"document_id": document_id}, include=[])
-    count = len(result["ids"])
-    if count:
-        collection.delete(where={"document_id": document_id})
+def delete_by_document(
+    document_id: str,
+    dsn: str = "postgresql://ld:ld@localhost:5432/lexai",
+) -> int:
+    with _conn(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM chunks WHERE document_id = %s", (document_id,))
+            count = cur.rowcount
     logger.info(f"Deleted {count} chunk(s) for document {document_id}")
     return count
 
@@ -91,45 +86,44 @@ def query(
     top_k: int = 8,
     min_score: float = 0.35,
     device: str = "cuda",
-    host: str = "localhost",
-    port: int = 8001,
+    dsn: str = "postgresql://ld:ld@localhost:5432/lexai",
+    **_ignored,
 ) -> list[RetrievedChunk]:
-    client = _get_client(host, port)
-    collection = _get_collection(client)
-
     query_vectors = embed(queries, device=device, batch_size=len(queries))
-
-    results = collection.query(
-        query_embeddings=query_vectors,
-        n_results=top_k,
-        where={"document_id": {"$in": document_ids}},
-        include=["documents", "metadatas", "distances"],
-    )
 
     seen: set[str] = set()
     retrieved: list[RetrievedChunk] = []
 
-    for q_idx, query_text in enumerate(queries):
-        ids = results["ids"][q_idx]
-        docs = results["documents"][q_idx]
-        metas = results["metadatas"][q_idx]
-        distances = results["distances"][q_idx]
-
-        for chunk_id, doc, meta, dist in zip(ids, docs, metas, distances):
-            # Chroma cosine distance: 0 = identical, 2 = opposite. Convert to similarity.
-            score = 1 - (dist / 2)
-            if score < min_score or chunk_id in seen:
-                continue
-            seen.add(chunk_id)
-            retrieved.append(RetrievedChunk(
-                chunk_id=chunk_id,
-                document_id=meta["document_id"],
-                page_number=meta["page_number"],
-                text=doc,
-                ocr_confidence=meta["ocr_confidence"],
-                score=score,
-                query=query_text,
-            ))
+    with _conn(dsn) as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            for query_text, qvec in zip(queries, query_vectors):
+                qvec_np = np.array(qvec, dtype=np.float32)
+                cur.execute(
+                    """
+                    SELECT chunk_id, document_id, page_number, text, ocr_confidence,
+                           1 - (embedding <=> %s) AS score
+                    FROM chunks
+                    WHERE document_id = ANY(%s)
+                    ORDER BY embedding <=> %s
+                    LIMIT %s
+                    """,
+                    (qvec_np, document_ids, qvec_np, top_k * 2),
+                )
+                for row in cur.fetchall():
+                    score = float(row["score"])
+                    cid = row["chunk_id"]
+                    if score < min_score or cid in seen:
+                        continue
+                    seen.add(cid)
+                    retrieved.append(RetrievedChunk(
+                        chunk_id=cid,
+                        document_id=row["document_id"],
+                        page_number=row["page_number"],
+                        text=row["text"],
+                        ocr_confidence=row["ocr_confidence"],
+                        score=score,
+                        query=query_text,
+                    ))
 
     retrieved.sort(key=lambda r: r.score, reverse=True)
     logger.info(f"Retrieved {len(retrieved)} chunks for {len(queries)} queries")

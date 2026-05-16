@@ -3,8 +3,7 @@
 Reset LexAI to a clean state.
 
 Clears:
-  - All rows in documents, drafts, and edit_patterns tables (Postgres)
-  - The lexai_chunks ChromaDB collection
+  - All rows in chunks, documents, drafts, and edit_patterns (Postgres + pgvector)
   - All files in data/documents/
 
 Usage:
@@ -12,16 +11,12 @@ Usage:
   python scripts/reset.py --yes     # skips confirmation
 """
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
 DSN = "postgresql://ld:ld@localhost:5432/lexai"
-CHROMA_HOST = "localhost"
-CHROMA_PORT = 8001
-COLLECTION = "lexai_chunks"
 DOCUMENT_DIR = ROOT / "data" / "documents"
 
 
@@ -30,35 +25,17 @@ def reset_postgres(dsn: str) -> None:
     with psycopg2.connect(dsn) as conn:
         conn.autocommit = True
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE drafts, documents, edit_patterns RESTART IDENTITY CASCADE")
-    print("  Postgres: documents, drafts, edit_patterns truncated")
-
-
-def reset_chromadb(host: str, port: int, collection: str) -> None:
-    import chromadb
-    from chromadb.config import Settings
-    client = chromadb.HttpClient(
-        host=host, port=port,
-        settings=Settings(anonymized_telemetry=False),
-    )
-    try:
-        client.delete_collection(collection)
-        print(f"  ChromaDB: collection '{collection}' deleted")
-    except Exception:
-        print(f"  ChromaDB: collection '{collection}' did not exist, skipping")
-    client.get_or_create_collection(collection, metadata={"hnsw:space": "cosine"})
-    print(f"  ChromaDB: collection '{collection}' recreated (empty)")
+            cur.execute(
+                "TRUNCATE TABLE chunks, drafts, documents, edit_patterns RESTART IDENTITY CASCADE"
+            )
+    print("  Postgres: chunks, documents, drafts, edit_patterns truncated")
 
 
 def reset_files(document_dir: Path) -> None:
     if not document_dir.exists():
         print(f"  Files: {document_dir} does not exist, skipping")
         return
-    removed = 0
-    for f in document_dir.iterdir():
-        if f.is_file():
-            f.unlink()
-            removed += 1
+    removed = sum(1 for f in document_dir.iterdir() if f.is_file() and not f.unlink())
     print(f"  Files: {removed} file(s) removed from {document_dir}")
 
 
@@ -76,7 +53,6 @@ def main() -> None:
 
     print("\nResetting...")
     reset_postgres(DSN)
-    reset_chromadb(CHROMA_HOST, CHROMA_PORT, COLLECTION)
     reset_files(DOCUMENT_DIR)
     print("\nDone. The app is clean.")
 
