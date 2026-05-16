@@ -5,6 +5,11 @@
 #         bash install.sh
 set -euo pipefail
 
+# Open fd 3 to the terminal for interactive prompts.
+# When run as `curl | bash`, stdin is the pipe so read would get EOF; /dev/tty
+# is the controlling terminal regardless of how stdin is wired.
+exec 3</dev/tty
+
 REPO_URL="https://github.com/heyhasanhere/LexAI.git"
 INSTALL_DIR="${LEXAI_DIR:-$HOME/lexai}"
 LEXAI_REMOTE_URL="${LEXAI_REMOTE_URL:-}"       # set by operator via serve.sh; empty = ask at prompt
@@ -120,14 +125,17 @@ choose_mode() {
     echo "  2) LexAI remote GPU    — free, rate-limited Qwen3-14B hosted by the operator"
     echo "  3) Local GPU           — run Qwen3-14B locally (requires NVIDIA GPU with 24 GB VRAM)"
     echo ""
-    read -rp "Enter choice [1/2/3]: " MODE_CHOICE </dev/tty
+    printf 'Enter choice [1/2/3]: '
+    read -r MODE_CHOICE <&3
 
     case "$MODE_CHOICE" in
         1)
             echo ""
-            read -rp "OpenAI API key (sk-…): " OPENAI_KEY </dev/tty
+            printf 'OpenAI API key (sk-…): '
+            read -r OPENAI_KEY <&3
             [[ -z "$OPENAI_KEY" ]] && _die "API key cannot be empty."
-            read -rp "Model [gpt-4o-mini]: " OPENAI_MODEL </dev/tty
+            printf 'Model [gpt-4o-mini]: '
+            read -r OPENAI_MODEL <&3
             OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o-mini}"
 
             LLM_BASE_URL="https://api.openai.com/v1"
@@ -138,7 +146,8 @@ choose_mode() {
         2)
             echo ""
             if [[ -z "$LEXAI_REMOTE_URL" ]]; then
-                read -rp "Remote GPU URL (ask the operator running serve.sh): " LEXAI_REMOTE_URL </dev/tty
+                printf 'Remote GPU URL (ask the operator running serve.sh): '
+                read -r LEXAI_REMOTE_URL <&3
                 [[ -z "$LEXAI_REMOTE_URL" ]] && _die "Remote URL cannot be empty."
             fi
             _yellow "Using remote GPU at: $LEXAI_REMOTE_URL"
@@ -162,7 +171,8 @@ choose_mode() {
             LLM_API_KEY="local"
             COMPOSE_PROFILES="full"
 
-            read -rp "HuggingFace token (optional, speeds downloads) [skip]: " HF_TOKEN </dev/tty
+            printf 'HuggingFace token (optional, speeds downloads) [skip]: '
+            read -r HF_TOKEN <&3
             HF_TOKEN="${HF_TOKEN:-}"
             ;;
         *)
