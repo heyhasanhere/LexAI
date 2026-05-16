@@ -157,11 +157,17 @@ def _build_doc_header(
     )
 
 
+_FIELDS_MAX_CHARS = 8000
+
+
 def _build_fields_block(fields_by_doc: dict[str, ExtractedFields]) -> str:
     lines = []
     for doc_id, fields in fields_by_doc.items():
         lines.append(f"### {doc_id}")
-        lines.append(json.dumps(fields.to_dict(), indent=2, default=str))
+        raw = json.dumps(fields.to_dict(), indent=2, default=str)
+        if len(raw) > _FIELDS_MAX_CHARS:
+            raw = raw[:_FIELDS_MAX_CHARS] + "\n... [truncated for context length]"
+        lines.append(raw)
     return "\n".join(lines)
 
 

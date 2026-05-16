@@ -114,8 +114,8 @@ def extract_fields(
     base_url: str = "http://localhost:8080/v1",
     model: str = "Qwen/Qwen3-14B-AWQ",
     api_key: str = "local",
-    max_tokens: int = 4096,
-    max_chunk_chars: int = 40000,
+    max_tokens: int = 3072,
+    max_chunk_chars: int = 28000,
 ) -> ExtractedFields:
     chunks = _split_into_page_chunks(text, max_chunk_chars)
     if len(chunks) == 1:
