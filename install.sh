@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/heyhasanhere/LexAI.git"
 INSTALL_DIR="${LEXAI_DIR:-$HOME/lexai}"
-LEXAI_REMOTE_URL="https://ai.lexai.app/v1"   # operator-hosted vLLM endpoint
+LEXAI_REMOTE_URL="${LEXAI_REMOTE_URL:-}"       # set by operator via serve.sh; empty = ask at prompt
 LEXAI_REMOTE_MODEL="Qwen/Qwen3-14B-AWQ"
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -137,7 +137,11 @@ choose_mode() {
             ;;
         2)
             echo ""
-            _yellow "No key required — the operator's GPU is open to all LexAI users."
+            if [[ -z "$LEXAI_REMOTE_URL" ]]; then
+                read -rp "Remote GPU URL (ask the operator running serve.sh): " LEXAI_REMOTE_URL
+                [[ -z "$LEXAI_REMOTE_URL" ]] && _die "Remote URL cannot be empty."
+            fi
+            _yellow "Using remote GPU at: $LEXAI_REMOTE_URL"
             _yellow "(Rate-limited to 6 requests/min per IP via Cloudflare + nginx)"
 
             LLM_BASE_URL="$LEXAI_REMOTE_URL"
@@ -216,8 +220,8 @@ print_summary() {
     _green "  API:  http://localhost:8000"
     _green "  Docs: http://localhost:8000/docs"
     echo ""
-    echo "  To stop:    docker compose -C $INSTALL_DIR down"
-    echo "  To restart: docker compose -C $INSTALL_DIR up -d"
+    echo "  To stop:    docker compose --project-directory $INSTALL_DIR down"
+    echo "  To restart: docker compose --project-directory $INSTALL_DIR up -d"
     echo ""
 }
 
