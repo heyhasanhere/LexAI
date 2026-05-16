@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -8,44 +9,31 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-EXTRACTION_PROMPT = """You are a document analyst. Extract all structured information from the document text below.
-The text uses [PAGE N] markers to indicate page numbers. Use these to produce accurate "page" integer values in your output.
+EXTRACTION_PROMPT = """You are a document analyst. Extract structured information from the document text below.
+The text uses [PAGE N] markers to indicate page numbers. Use these for "page" integer values.
 
-Return a JSON object. Only include sections where you actually found data — omit empty sections entirely.
-Use null for individual fields that are absent. Page numbers must be integers (or null if truly unknown).
+Return ONLY a JSON object. Omit any section where you found zero relevant data.
+Use null for absent individual fields. Page numbers must be integers (or null).
 
 {{
   "document_type": "<type or null>",
-  "parties": [{{"role": "<role>", "name": "<name>", "identifier": "<ABN/ID/number or null>", "page": <int or null>}}],
-  "key_dates": [{{"label": "<date label>", "date": "<date>", "page": <int or null>, "alert": "<deadline warning or null>"}}],
+  "parties": [{{"role": "<role>", "name": "<name>", "page": <int or null>}}],
+  "key_dates": [{{"label": "<label>", "date": "<date>", "page": <int or null>}}],
   "key_clauses": [{{"name": "<clause name>", "value": "<extracted value>", "page": <int or null>}}],
   "flags_and_risks": [{{"description": "<risk or quality issue>", "page": <int or null>}}],
-  "matter_timeline": [{{"date": "<date>", "event": "<event or milestone>", "page": <int or null>}}],
-  "obligation_tracker": [{{"party": "<party>", "obligation": "<obligation>", "due": "<date or condition or null>", "page": <int or null>}}],
-  "risk_summary": {{"overall": "<summary>", "level": "High|Medium|Low", "items": [{{"severity": "High|Medium|Low", "description": "<item>", "page": <int or null>}}]}},
-  "clause_library": [{{"clause_type": "<type>", "text": "<verbatim or near-verbatim text>", "page": <int or null>}}],
-  "party_profile": [{{"entity": "<name>", "role": "<role>", "identifiers": "<IDs or null>", "page": <int or null>}}],
-  "due_diligence_checklist": [{{"item": "<required item>", "found": true/false, "page": <int or null>}}],
-  "anomaly_report": [{{"clause": "<clause or element>", "deviation": "<deviation from standard>", "page": <int or null>}}],
-  "transcript_summary": [{{"speaker": "<name>", "statement": "<key statement or position>", "page": <int or null>}}],
-  "case_law_citations": [{{"case": "<case or statute>", "context": "<context of reference>", "page": <int or null>}}],
-  "document_gap_report": [{{"expected": "<expected element>", "status": "Present|Missing|Illegible"}}],
-  "audit_trail": [{{"actor": "<actor>", "action": "<action>", "timestamp": "<timestamp>", "page": <int or null>}}],
-  "source_grounding": [{{"field": "<field or topic>", "value": "<value>", "page": <int or null>}}],
-  "extraction_notes": "<brief description of the document and notable extraction points, or null>",
-  "flags": ["<structural or quality issue only>"]
+  "risk_summary": {{"overall": "<one-sentence summary>", "level": "High|Medium|Low"}},
+  "extraction_notes": "<brief notes or null>",
+  "flags": ["<structural/quality issue>"]
 }}
 
 Rules:
-- document_type: identify the actual document type (contract, invoice, deed, report, letter, memo, medical record, etc.)
-- parties: any named people or organisations and their roles
-- key_dates: all dates that matter (signing, recording, due dates, deadlines, expirations)
-- key_clauses: important terms, conditions, and provisions found in the document
-- flags_and_risks: both quality issues AND substantive risks (missing signatures, unusual clauses, liabilities)
-- source_grounding: important facts not captured in other sections above
-- flags (array): structural/quality issues only (missing pages, OCR problems, truncated content, conflicting information)
-- Omit any section where you found zero relevant data
-- Return JSON only. No text outside the JSON object.
+- document_type: identify the document type (contract, deed, invoice, letter, etc.)
+- parties: named people or organisations and their roles
+- key_dates: signing date, deadlines, expirations, recording dates
+- key_clauses: the most important terms, conditions, and obligations
+- flags_and_risks: quality issues (missing pages, illegible text) and substantive risks (unusual clauses, liabilities)
+- flags array: structural/quality issues only
+- Return JSON only. No prose outside the JSON object.
 
 Document text:
 {text}"""
@@ -148,59 +136,127 @@ def _extract_single(
     api_key: str,
     max_tokens: int,
     provider: str = "vllm",
+    _retries: int = 3,
 ) -> ExtractedFields:
     client = get_client(provider, base_url, api_key)
     prompt = EXTRACTION_PROMPT.format(text=text)
 
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=0.0,
-            extra_body=chat_extra_body(provider),
-        )
-        raw = response.choices[0].message.content.strip()
+    for attempt in range(_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                temperature=0.0,
+                extra_body=chat_extra_body(provider),
+            )
+            raw = response.choices[0].message.content.strip()
 
-        if "<think>" in raw:
-            raw = raw.split("</think>")[-1].strip()
+            if "<think>" in raw:
+                raw = raw.split("</think>")[-1].strip()
 
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = raw.strip()
 
-        data = json.loads(raw)
+            if not raw:
+                raise ValueError("Empty response from LLM")
 
-        return ExtractedFields(
-            document_type=data.get("document_type"),
-            parties=data.get("parties") or [],
-            key_dates=data.get("key_dates") or [],
-            key_clauses=data.get("key_clauses") or [],
-            flags_and_risks=data.get("flags_and_risks") or [],
-            matter_timeline=data.get("matter_timeline") or [],
-            obligation_tracker=data.get("obligation_tracker") or [],
-            risk_summary=data.get("risk_summary") or None,
-            clause_library=data.get("clause_library") or [],
-            party_profile=data.get("party_profile") or [],
-            due_diligence_checklist=data.get("due_diligence_checklist") or [],
-            anomaly_report=data.get("anomaly_report") or [],
-            transcript_summary=data.get("transcript_summary") or [],
-            case_law_citations=data.get("case_law_citations") or [],
-            document_gap_report=data.get("document_gap_report") or [],
-            audit_trail=data.get("audit_trail") or [],
-            source_grounding=data.get("source_grounding") or [],
-            extraction_notes=data.get("extraction_notes"),
-            flags=data.get("flags") or [],
-        )
+            # Repair truncated JSON by trimming to last complete top-level value
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                repaired = _repair_truncated_json(raw)
+                if repaired is None:
+                    raise
+                logger.warning("Extraction response was truncated; parsed partial result")
+                data = repaired
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Field extraction JSON parse failed: {e}")
-        return ExtractedFields(extraction_notes=f"JSON parse error: {e}", flags=["extraction_failed"])
-    except Exception as e:
-        logger.error(f"Field extraction failed: {e}")
-        return ExtractedFields(extraction_notes=str(e), flags=["extraction_failed"])
+            return ExtractedFields(
+                document_type=data.get("document_type"),
+                parties=data.get("parties") or [],
+                key_dates=data.get("key_dates") or [],
+                key_clauses=data.get("key_clauses") or [],
+                flags_and_risks=data.get("flags_and_risks") or [],
+                matter_timeline=data.get("matter_timeline") or [],
+                obligation_tracker=data.get("obligation_tracker") or [],
+                risk_summary=data.get("risk_summary") or None,
+                clause_library=data.get("clause_library") or [],
+                party_profile=data.get("party_profile") or [],
+                due_diligence_checklist=data.get("due_diligence_checklist") or [],
+                anomaly_report=data.get("anomaly_report") or [],
+                transcript_summary=data.get("transcript_summary") or [],
+                case_law_citations=data.get("case_law_citations") or [],
+                document_gap_report=data.get("document_gap_report") or [],
+                audit_trail=data.get("audit_trail") or [],
+                source_grounding=data.get("source_grounding") or [],
+                extraction_notes=data.get("extraction_notes"),
+                flags=data.get("flags") or [],
+            )
+
+        except Exception as e:
+            msg = str(e)
+            # Rate limit — back off and retry
+            if "rate_limit" in msg or "429" in msg or "too many" in msg.lower():
+                wait = 60 * (attempt + 1)
+                logger.warning(f"Rate limit hit on attempt {attempt + 1}; retrying in {wait}s")
+                time.sleep(wait)
+                continue
+            if attempt < _retries - 1 and ("timeout" in msg.lower() or "connection" in msg.lower()):
+                time.sleep(5 * (attempt + 1))
+                continue
+            logger.error(f"Field extraction failed: {e}")
+            return ExtractedFields(extraction_notes=msg, flags=["extraction_failed"])
+
+    logger.error("Field extraction exhausted all retries")
+    return ExtractedFields(flags=["extraction_failed"])
+
+
+def _repair_truncated_json(raw: str) -> dict | None:
+    """Try to recover a valid JSON object from a truncated LLM response.
+
+    Scans backward in 50-char steps, closing any open brackets at each candidate
+    boundary. Returns the parsed dict from the longest valid prefix found.
+    """
+    def _try_close(s: str) -> dict | None:
+        s = s.rstrip().rstrip(",").rstrip()
+        stack: list[str] = []
+        in_str = False
+        esc = False
+        for ch in s:
+            if esc:
+                esc = False
+                continue
+            if ch == "\\" and in_str:
+                esc = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if ch in "{[":
+                stack.append("}" if ch == "{" else "]")
+            elif ch in "}]" and stack and stack[-1] == ch:
+                stack.pop()
+        # If we're still inside a string literal the boundary is mid-token — skip
+        if in_str:
+            return None
+        candidate = s + "".join(reversed(stack))
+        try:
+            result = json.loads(candidate)
+            return result if isinstance(result, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    step = 50
+    for end in range(len(raw), 0, -step):
+        result = _try_close(raw[:end])
+        if result is not None:
+            return result
+    return None
 
 
 def _merge_fields(fields_list: list[ExtractedFields]) -> ExtractedFields:
