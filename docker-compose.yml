@@ -1,6 +1,6 @@
 # Profiles:
-#   lite  — OpenAI API or remote GPU  (no local vLLM, no NVIDIA required)
-#   full  — local Qwen3-14B on NVIDIA GPUs + rate-limited public gateway
+#   lite  — cloud LLM provider or remote GPU (no local vLLM, no NVIDIA required)
+#   full  — local Qwen3-4B on NVIDIA GPUs + rate-limited public gateway
 #
 # The installer writes .env and sets COMPOSE_PROFILES automatically.
 # Manual usage:
@@ -12,7 +12,7 @@ services:
   # ── Backing stores (both profiles) ────────────────────────────────────────
 
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16   # pgvector pre-installed
     ports:
       - "5432:5432"
     environment:
@@ -28,20 +28,6 @@ services:
       timeout: 5s
       retries: 5
 
-  chromadb:
-    image: chromadb/chroma:latest
-    ports:
-      - "8001:8000"
-    volumes:
-      - chroma_data:/chroma/chroma
-    environment:
-      - ALLOW_RESET=true
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # ── Application (both profiles) ───────────────────────────────────────────
 
   api:
@@ -52,18 +38,15 @@ services:
       - "8000:8000"
     volumes:
       - doc_data:/app/data/documents
+      - huggingface_cache:/root/.cache/huggingface   # Marker + embedding models persist here
     env_file:
       - .env
     environment:
       - LD_STORAGE__POSTGRES_DSN=postgresql://ld:ld@postgres:5432/lexai
-      - LD_STORAGE__VECTOR_STORE__HOST=chromadb
-      - LD_STORAGE__VECTOR_STORE__PORT=8000
     command: uvicorn src.api.routes:app --host 0.0.0.0 --port 8000
     depends_on:
       postgres:
         condition: service_healthy
-      chromadb:
-        condition: service_started
       vllm:
         condition: service_healthy
         required: false
@@ -112,7 +95,7 @@ services:
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
     command: >
-      --model Qwen/Qwen3-14B-AWQ
+      --model Qwen/Qwen3-4B-AWQ
       --tensor-parallel-size 2
       --max-model-len 16384
       --gpu-memory-utilization 0.70
@@ -148,6 +131,5 @@ services:
 
 volumes:
   postgres_data:
-  chroma_data:
   doc_data:
   huggingface_cache:

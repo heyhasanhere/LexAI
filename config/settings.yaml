@@ -3,27 +3,23 @@
 # Example: LD_LLM__BASE_URL overrides llm.base_url
 
 llm:
+  # Provider options: vllm | openai | groq | together | openrouter | gemini | mistral
+  # For vllm: set base_url to your vLLM endpoint and api_key to any non-empty string.
+  # For cloud providers: set api_key to your API key; base_url can be omitted (uses default).
+  # Free options: groq (llama-3.1-8b-instant), openrouter (meta-llama/llama-3.1-8b-instruct:free),
+  #               gemini (gemini-2.0-flash-lite), mistral (mistral-small-latest, free tier)
+  provider: "vllm"
   base_url: "http://localhost:8080/v1"  # vLLM OpenAI-compatible endpoint
-  model: "Qwen/Qwen3-14B-AWQ"
-  max_tokens: 4096
+  model: "Qwen/Qwen3-4B-AWQ"           # 4B uses ~4GB VRAM vs 14GB for 14B-AWQ
+  max_tokens: 2048
   api_key: "local"                      # vLLM requires a non-empty value; content is ignored
 
 ocr:
-  engine: "tesseract"                   # tesseract | azure_vision | google_vision
-  dpi: 300                              # DPI for PDF-to-image rendering (300 = good quality)
-  language: "eng"                       # tesseract language code
-  image_only_threshold: 100             # chars/page below which PDF page is treated as image-only
-  preprocessing:
-    deskew: true
-    denoise: true
-    contrast_enhance: true              # CLAHE adaptive histogram equalization
-    binarize: true                      # Otsu thresholding
-  tesseract:
-    oem: 3                              # 3 = LSTM only (most accurate)
-    psm: 6                              # 6 = uniform text block; 11 = sparse text (survey maps)
-  confidence:
-    low_threshold: 0.40                 # average word confidence below this → chunk flagged low_confidence
-    failure_threshold: 0.10             # average word confidence below this → page marked ocr_failed
+  image_only_threshold: 100             # chars/page below which a PDF page is treated as scanned and sent to Marker
+
+extraction:
+  max_chunk_chars: 12000                # max chars per LLM call during field extraction (keep within provider TPM)
+  max_tokens: 1024                      # max output tokens per extraction call
 
 chunking:
   strategy: "sentence"                  # sentence | fixed | paragraph
@@ -50,17 +46,14 @@ retrieval:
 
 generation:
   temperature: 0.1                      # low for factual accuracy; increase for more fluency
-  max_tokens: 4096
+  max_tokens: 2048
   draft_types:
     - "case_fact_summary"
 
 storage:
   document_dir: "./data/documents"      # where uploaded files are stored on disk
   postgres_dsn: "postgresql://ld:ld@localhost:5432/lexai"
-  vector_store:
-    host: "localhost"
-    port: 8001
-    collection: "lexai_chunks"
+  # vector store is pgvector inside Postgres — no separate service needed
 
 learning:
   min_frequency_threshold: 3           # patterns below this frequency are stored but not injected

@@ -6,20 +6,31 @@ uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
 pydantic>=2.7.0
 pydantic-settings>=2.2.0
-pdfminer.six>=20231228
-pdf2image>=1.17.0
+
+# Document processing — GPU-accelerated via Marker + PyMuPDF
+marker-pdf>=1.0.0
+pymupdf>=1.24.0
 Pillow>=10.3.0
-pytesseract>=0.3.10
-opencv-python-headless>=4.9.0
-deskew>=1.5.1
+
+# NLP / chunking
 nltk>=3.8.1
 tiktoken>=0.7.0
-chromadb>=1.0.0,<2.0.0
+
+# Embeddings
+sentence-transformers>=5.0.0,<6.0.0
+
+# Vector store (pgvector in Postgres — no separate service)
+pgvector>=0.3.0
+
+# LLM client
 openai>=1.30.0
+
+# Database
 psycopg2-binary>=2.9.9
 pyyaml>=6.0.1
 python-dotenv>=1.0.1
 structlog>=24.1.0
 rich>=13.7.1
-sentence-transformers>=5.0.0,<6.0.0
+
+# API / UI
 streamlit>=1.35.0

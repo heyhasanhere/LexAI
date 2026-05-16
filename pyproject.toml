@@ -17,30 +17,21 @@ dependencies = [
     "pydantic>=2.7.0",
     "pydantic-settings>=2.2.0",
 
-    # PDF processing
-    "pdfminer.six>=20231228",
-    "pdf2image>=1.17.0",            # wraps Poppler for PDF-to-image
-
-    # Image processing and OCR
+    # Document processing — GPU-accelerated via Marker + PyMuPDF (replaces Tesseract/pdfminer/pdf2image)
+    "marker-pdf>=1.0.0",
+    "pymupdf>=1.24.0",
     "Pillow>=10.3.0",
-    "pytesseract>=0.3.10",
-    "opencv-python-headless>=4.9.0",
-    "deskew>=1.5.1",
 
     # NLP / chunking
     "nltk>=3.8.1",
     "tiktoken>=0.7.0",              # token counting (OpenAI tokenizer)
 
-    # Embeddings and vector store
-    "chromadb>=0.5.0",
-    "openai>=1.30.0",               # for text-embedding-3-small
-
-    # LLM
-    "anthropic>=0.28.0",
+    # Embeddings + vector store (pgvector in Postgres — no separate service)
+    "pgvector>=0.3.0",
+    "openai>=1.30.0",
 
     # Database
     "psycopg2-binary>=2.9.9",
-    "sqlalchemy>=2.0.30",
 
     # Utilities
     "pyyaml>=6.0.1",
