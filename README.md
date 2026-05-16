@@ -4,22 +4,15 @@ LexAI ingests legal documents, extracts structured fields via LLM, retrieves rel
 
 ---
 
-## Table of Contents
+<details>
+<summary><strong>1. Installation</strong></summary>
 
-1. [Use LexAI from a browser (no install)](#1-use-lexai-from-a-browser-no-install)
-2. [Install LexAI locally (one command)](#2-install-lexai-locally-one-command)
-3. [Self-host LexAI (expose your own GPU)](#3-self-host-lexai-expose-your-own-gpu)
-4. [How install.sh works internally](#4-how-installsh-works-internally)
-5. [How serve.sh works internally](#5-how-servesh-works-internally)
-6. [LLM backend options](#6-llm-backend-options)
-7. [Architecture](#7-architecture)
-8. [Abuse protection](#8-abuse-protection)
-9. [Configuration reference](#9-configuration-reference)
-10. [Development setup](#10-development-setup)
+<br>
 
----
+<details>
+<summary><strong>Use LexAI from a browser</strong></summary>
 
-## 1. Use LexAI from a browser (no install)
+<br>
 
 If the operator is running `scripts/serve.sh`, they will share a URL that looks like:
 
@@ -29,15 +22,20 @@ https://some-random-words.trycloudflare.com
 
 Open it in any browser. No account, no install, no Docker.
 
+</details>
+
 ---
 
-## 2. Install LexAI locally (one command)
+<details>
+<summary><strong>Install LexAI locally</strong></summary>
+
+<br>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/heyhasanhere/LexAI/main/install.sh | bash
 ```
 
-The script asks you to choose an LLM backend (see [§6](#6-llm-backend-options)), then:
+The script asks you to choose an LLM backend (see [LLM backend](#5-llm-backend)), then:
 
 - Installs Docker and git if they are missing
 - Clones the repo into `~/lexai`
@@ -59,9 +57,12 @@ To restart: `docker compose --project-directory ~/lexai up -d`
 
 ---
 
-## 3. Self-host LexAI (expose your own GPU)
+<details>
+<summary><strong>Self-host LexAI (expose your own GPU)</strong></summary>
 
-### Prerequisites
+<br>
+
+#### Prerequisites
 
 | Requirement | Notes |
 |---|---|
@@ -70,7 +71,7 @@ To restart: `docker compose --project-directory ~/lexai up -d`
 | NVIDIA drivers | Run `nvidia-smi` to verify |
 | A domain name | Point an A record at your server's IP (used for a stable URL in `install.sh`) |
 
-### Step 1 — First-time host setup
+#### Step 1 — First-time host setup
 
 ```bash
 bash scripts/setup_host.sh
@@ -78,7 +79,7 @@ bash scripts/setup_host.sh
 
 Installs Docker Engine, the NVIDIA Container Toolkit, and required system packages. Reboot if prompted.
 
-### Step 2 — Clone and configure
+#### Step 2 — Clone and configure
 
 ```bash
 git clone https://github.com/heyhasanhere/LexAI.git ~/lexai
@@ -96,7 +97,7 @@ LD_LLM__API_KEY=local
 HF_TOKEN=          # optional — speeds up model download from HuggingFace
 ```
 
-### Step 3 — Start all services
+#### Step 3 — Start all services
 
 ```bash
 docker compose up -d
@@ -117,13 +118,13 @@ curl http://localhost:8000/health
 # {"status":"ok"}
 ```
 
-### Step 4 — Expose publicly via Cloudflare Quick Tunnels
+#### Step 4 — Expose publicly via Cloudflare Quick Tunnels
 
 ```bash
 bash scripts/serve.sh
 ```
 
-The script verifies that the UI (port 8501) and nginx gateway (port 8090) are running, then starts two outbound Cloudflare tunnels. When both are ready, it prints:
+The script verifies that the UI (port 8501) and nginx gateway are running, then starts two outbound Cloudflare tunnels. When both are ready, it prints:
 
 ```
 ════════════════════════════════════════════
@@ -145,100 +146,18 @@ Press `Ctrl-C` to stop both tunnels.
 
 > **Note:** Quick Tunnel URLs are randomly generated and change each time `serve.sh` is run. For a stable permanent URL, set up a named Cloudflare Tunnel attached to your domain — see the [Cloudflare Tunnel docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).
 
----
+</details>
 
-## 4. How install.sh works internally
+</details>
 
-```
-curl -fsSL .../install.sh | bash
-```
-
-**Step 1 — OS detection**  
-Reads `/etc/os-release` to identify the Linux distribution (ubuntu, fedora, arch, etc.) or detects macOS. Used to choose the correct package manager in subsequent steps.
-
-**Step 2 — Install git**  
-Calls `apt-get`, `dnf`, or `pacman` depending on distro. Skipped if `git` is already on `$PATH`.
-
-**Step 3 — Install Docker**  
-Same distro-aware logic. Adds the official Docker apt/dnf repo, installs `docker-ce` + `docker-compose-plugin`, enables the daemon, and adds the current user to the `docker` group. Skipped if Docker is already installed.
-
-**Step 4 — Clone or update repo**  
-Clones `https://github.com/heyhasanhere/LexAI.git` into `~/lexai` (or `$LEXAI_DIR` if set). If the directory already exists, runs `git pull --ff-only` instead.
-
-**Step 5 — Choose LLM backend (interactive)**  
-Prompts for one of three options (see [§6](#6-llm-backend-options)). Sets four variables: `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `COMPOSE_PROFILES`.
-
-**Step 6 — Write .env**  
-Creates `~/lexai/.env` from the variables set in step 5. This file is read by `docker compose` and by the FastAPI application at startup. It contains the LLM endpoint, model name, and API key.
-
-**Step 7 — Build application image**  
-Runs `docker compose build api`. Builds a single `lexai-app` image used by both the `api` and `ui` services. Installs Python dependencies, Tesseract OCR, poppler, and libpq. Takes approximately 3 minutes on first run; cached on subsequent runs.
-
-**Step 8 — Start services**  
-Runs `docker compose up -d`. Which services start depends on `COMPOSE_PROFILES`:
-- `lite` — Postgres, ChromaDB, FastAPI, Streamlit (no local GPU)
-- `full` — everything above plus vLLM and the nginx rate-limiting gateway
-
-**Step 9 — Health check**  
-Polls `http://localhost:8000/health` every 5 seconds for up to 150 seconds. Prints the local URLs once the API responds with `{"status":"ok"}`.
+</details>
 
 ---
 
-## 5. How serve.sh works internally
+<details>
+<summary><strong>2. Architecture</strong></summary>
 
-```bash
-bash scripts/serve.sh
-```
-
-**Step 1 — Verify services are running**  
-Sends a test HTTP request to port 8501 (Streamlit) and checks that port 8090 (nginx gateway) returns 403 on `/` (the expected response for a path that isn't `/v1/chat/completions`). Exits with an error message if either is unreachable.
-
-**Step 2 — Install cloudflared**  
-Checks for `cloudflared` on `$PATH`. If missing, downloads the appropriate package from the GitHub releases page and installs it. On macOS, uses `brew`.
-
-**Step 3 — Start UI tunnel**  
-Runs `cloudflared tunnel --url http://localhost:8501` as a background process. The tunnel is entirely outbound — cloudflared opens a persistent HTTPS connection to Cloudflare's edge network, which routes incoming browser requests back to port 8501 on this machine. No firewall rules, no port forwarding, no static IP required.
-
-**Step 4 — Start GPU gateway tunnel**  
-Same mechanism for port 8090. This port is bound only to `127.0.0.1` in Docker, so it cannot be reached directly from the internet — only through the tunnel. The tunnel forwards requests to nginx, which enforces rate limits before proxying to vLLM.
-
-**Step 5 — Print URLs and wait**  
-Each tunnel process pipes its stderr through `parse_tunnel`, which watches for the `*.trycloudflare.com` URL and prints the highlighted banner when it appears. Both processes run until `Ctrl-C`, which kills both via a `trap INT TERM` handler.
-
----
-
-## 6. LLM backend options
-
-### Option 1 — OpenAI API
-
-Uses your own OpenAI account. Default model: `gpt-4o-mini`.
-
-- Requires an `sk-...` API key
-- No GPU required on the host
-- `COMPOSE_PROFILES=lite` — vLLM is not started
-- Cost: billed per token by OpenAI
-
-### Option 2 — LexAI remote GPU (free)
-
-Sends requests to the operator's vLLM endpoint (Qwen3-14B-AWQ). No key required.
-
-- Rate-limited to 6 requests/minute per IP by the nginx gateway
-- `COMPOSE_PROFILES=lite` — no local GPU needed
-- The operator must be running `scripts/serve.sh` for this to work
-- Payloads over 256 KB are rejected
-
-### Option 3 — Local GPU
-
-Runs Qwen3-14B-AWQ on your own NVIDIA GPU(s).
-
-- Requires NVIDIA drivers and 24 GB VRAM minimum
-- `COMPOSE_PROFILES=full`
-- vLLM downloads the model (~8 GB) on first start
-- No external network dependency after download
-
----
-
-## 7. Architecture
+<br>
 
 ```
 Browser
@@ -248,8 +167,8 @@ Streamlit UI (port 8501)
   │  HTTP (internal Docker network)
   ▼
 FastAPI (port 8000)
-  ├── Postgres (port 5432)      — documents, drafts, edit_patterns
-  ├── ChromaDB (port 8001)      — chunk embeddings (BGE-large-en-v1.5)
+  ├── Postgres           — documents, drafts, edit_patterns
+  ├── ChromaDB           — chunk embeddings (BGE-large-en-v1.5)
   └── LLM backend
         ├── OpenAI API          (lite profile, option 1)
         ├── Remote vLLM         (lite profile, option 2 — via Cloudflare tunnel)
@@ -257,60 +176,29 @@ FastAPI (port 8000)
 
 Public access (operator only, full profile):
   Cloudflare edge
-    ├──→ Quick Tunnel :8501  →  Streamlit   (users browse here)
-    └──→ Quick Tunnel :8090  →  nginx gateway  →  vLLM :8000
+    ├──→ Quick Tunnel :8501  →  Streamlit        (users browse here)
+    └──→ Quick Tunnel       →  nginx gateway  →  vLLM
 ```
 
 ### Data flows
 
 **Document ingestion** (`POST /documents`)  
-File → MIME detection → pdfminer.six (native PDFs) or Tesseract OCR (scanned/image) or HTML tag stripping → page-annotated text with `[PAGE N]` markers → LLM field extraction (chunked at `[PAGE N]` boundaries if text exceeds 28,000 chars) → sentence chunking with overlap → BGE embedding → ChromaDB upsert + Postgres row.
+File → MIME detection → pdfminer.six (native PDFs) or Tesseract OCR (scanned/image) or HTML tag stripping → page-annotated text → LLM field extraction → sentence chunking with overlap → BGE embedding → ChromaDB upsert + Postgres row.
 
 **Draft generation** (`POST /drafts`)  
-4 fixed semantic queries → ChromaDB top-k retrieval → load generalizable edit patterns from Postgres (filtered by document type and section) → build prompt with extracted fields, retrieved chunks, and prior edit patterns → LLM call → citation parsing (`[doc_id, chunk_id]` format) → ungrounded sentence detection → return draft. Generation aborts with an error if zero chunks are retrieved (intentional hallucination prevention).
+Semantic queries → ChromaDB top-k retrieval → load generalizable edit patterns from Postgres (filtered by document type and section) → build prompt with extracted fields, retrieved chunks, and prior edit patterns → LLM call → citation parsing → ungrounded sentence detection → return draft. Generation aborts with an error if zero chunks are retrieved (intentional hallucination prevention).
 
 **Edit learning** (`POST /drafts/{id}/submit`)  
-Operator submits corrected draft text → difflib line-level diff against original → LLM classifies each changed hunk (edit type, when to apply, whether generalizable) → only edits marked `generalizable=true` stored in the `edit_patterns` Postgres table → patterns with `frequency >= 3` are injected as few-shot examples into future generation prompts.
+Operator submits corrected draft text → difflib line-level diff against original → LLM classifies each changed hunk (edit type, when to apply, whether generalizable) → only edits marked `generalizable=true` stored in the `edit_patterns` Postgres table → patterns that meet the frequency threshold are injected as few-shot examples into future generation prompts.
+
+</details>
 
 ---
 
-## 8. Abuse protection
+<details>
+<summary><strong>3. Development Setup</strong></summary>
 
-The public GPU endpoint is protected at three layers:
-
-| Layer | Mechanism | Effect |
-|---|---|---|
-| vLLM | `--max-num-seqs 4` | At most 4 concurrent GPU jobs; excess requests queue, not crash |
-| nginx | `limit_req_zone rate=6r/m` | 6 requests/minute per real IP; 429 on excess |
-| nginx | `client_max_body_size 256k` | Rejects oversized payloads (context stuffing) |
-| nginx | Endpoint allowlist | Only `/v1/chat/completions` is proxied; all other paths return 403 |
-| nginx | `proxy_set_header Authorization ""` | Strips client-supplied auth headers |
-| nginx | `geo $realip` with Cloudflare IP ranges | Rate limiting uses the real client IP from `CF-Connecting-IP`, not Cloudflare's egress IP |
-| Cloudflare | DDoS protection, TLS termination | Absorbs volumetric attacks before they reach the host |
-
----
-
-## 9. Configuration reference
-
-Config is loaded from `config/settings.yaml`. Any key can be overridden with an environment variable using the prefix `LD_` and double-underscore nesting (e.g. `LD_LLM__BASE_URL` overrides `llm.base_url`).
-
-| Env var | settings.yaml key | Default | Purpose |
-|---|---|---|---|
-| `LD_LLM__BASE_URL` | `llm.base_url` | `http://localhost:8080/v1` | LLM API endpoint |
-| `LD_LLM__MODEL` | `llm.model` | `Qwen/Qwen3-14B-AWQ` | Model name sent in API requests |
-| `LD_LLM__API_KEY` | `llm.api_key` | `local` | API key (`sk-...` for OpenAI) |
-| `LD_LLM__MAX_TOKENS` | `llm.max_tokens` | `4096` | Max tokens in LLM responses |
-| `LD_STORAGE__POSTGRES_DSN` | `storage.postgres_dsn` | `postgresql://ld:ld@localhost:5432/lexai` | Postgres connection string |
-| `LD_STORAGE__VECTOR_STORE__HOST` | `storage.vector_store.host` | `localhost` | ChromaDB host |
-| `LD_STORAGE__VECTOR_STORE__PORT` | `storage.vector_store.port` | `8001` | ChromaDB port |
-| `LD_EMBEDDING__MODEL` | `embedding.model` | `BAAI/bge-large-en-v1.5` | Sentence-transformers model |
-| `LD_EMBEDDING__DEVICE` | `embedding.device` | `auto` | `auto`, `cpu`, or `cuda:N`. `auto` picks the GPU with the most free VRAM if CUDA is available, else CPU. |
-
-> **Embedding device:** Default is `auto`. When CUDA is available the model (BGE-large-en-v1.5, ~670 MiB in float16) is loaded on the GPU with the most free VRAM. vLLM's `gpu_memory_utilization 0.70` leaves roughly 2 GB free per card, which is sufficient. Force CPU with `LD_EMBEDDING__DEVICE=cpu`.
-
----
-
-## 10. Development setup
+<br>
 
 For local development (backing services via Docker, app code running directly):
 
@@ -346,3 +234,164 @@ python scripts/simulate_edits.py
 # Reset all data — drops and recreates Postgres tables, clears ChromaDB
 python scripts/reset.py
 ```
+
+</details>
+
+---
+
+<details>
+<summary><strong>4. More about installations</strong></summary>
+
+<br>
+
+<details>
+<summary><strong>How install.sh works internally</strong></summary>
+
+<br>
+
+```
+curl -fsSL .../install.sh | bash
+```
+
+**Step 1 — OS detection**  
+Reads `/etc/os-release` to identify the Linux distribution (ubuntu, fedora, arch, etc.) or detects macOS. Used to choose the correct package manager in subsequent steps.
+
+**Step 2 — Install git**  
+Calls `apt-get`, `dnf`, or `pacman` depending on distro. Skipped if `git` is already on `$PATH`.
+
+**Step 3 — Install Docker**  
+Same distro-aware logic. Adds the official Docker apt/dnf repo, installs `docker-ce` + `docker-compose-plugin`, enables the daemon, and adds the current user to the `docker` group. Skipped if Docker is already installed.
+
+**Step 4 — Clone or update repo**  
+Clones `https://github.com/heyhasanhere/LexAI.git` into `~/lexai` (or `$LEXAI_DIR` if set). If the directory already exists, runs `git pull --ff-only` instead.
+
+**Step 5 — Choose LLM backend (interactive)**  
+Prompts for one of three options (see [LLM backend](#5-llm-backend)). Sets four variables: `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `COMPOSE_PROFILES`.
+
+**Step 6 — Write .env**  
+Creates `~/lexai/.env` from the variables set in step 5. This file is read by `docker compose` and by the FastAPI application at startup. It contains the LLM endpoint, model name, and API key.
+
+**Step 7 — Build application image**  
+Runs `docker compose build api`. Builds a single `lexai-app` image used by both the `api` and `ui` services. Installs Python dependencies, Tesseract OCR, poppler, and libpq. Takes approximately 3 minutes on first run; cached on subsequent runs.
+
+**Step 8 — Start services**  
+Runs `docker compose up -d`. Which services start depends on `COMPOSE_PROFILES`:
+
+- `lite` — Postgres, ChromaDB, FastAPI, Streamlit (no local GPU)
+- `full` — everything above plus vLLM and the nginx rate-limiting gateway
+
+**Step 9 — Health check**  
+Polls `http://localhost:8000/health` every 5 seconds for up to 150 seconds. Prints the local URLs once the API responds with `{"status":"ok"}`.
+
+</details>
+
+---
+
+<details>
+<summary><strong>How serve.sh works internally</strong></summary>
+
+<br>
+
+```bash
+bash scripts/serve.sh
+```
+
+**Step 1 — Verify services are running**  
+Sends a test HTTP request to port 8501 (Streamlit) and checks that the nginx gateway returns the expected response on `/`. Exits with an error message if either is unreachable.
+
+**Step 2 — Install cloudflared**  
+Checks for `cloudflared` on `$PATH`. If missing, downloads the appropriate package from the GitHub releases page and installs it. On macOS, uses `brew`.
+
+**Step 3 — Start UI tunnel**  
+Runs `cloudflared tunnel --url http://localhost:8501` as a background process. The tunnel is entirely outbound — cloudflared opens a persistent HTTPS connection to Cloudflare's edge network, which routes incoming browser requests back to port 8501 on this machine. No firewall rules, no port forwarding, no static IP required.
+
+**Step 4 — Start GPU gateway tunnel**  
+Same mechanism for the nginx gateway port. This port is bound only to `127.0.0.1` in Docker, so it cannot be reached directly from the internet — only through the tunnel. The tunnel forwards requests to nginx, which enforces rate limits before proxying to vLLM.
+
+**Step 5 — Print URLs and wait**  
+Each tunnel process pipes its stderr through `parse_tunnel`, which watches for the `*.trycloudflare.com` URL and prints the highlighted banner when it appears. Both processes run until `Ctrl-C`, which kills both via a `trap INT TERM` handler.
+
+</details>
+
+</details>
+
+---
+
+<details>
+<summary><strong>5. LLM backend</strong></summary>
+
+<br>
+
+### Option 1 — OpenAI API
+
+Uses your own OpenAI account. Default model: `gpt-4o-mini`.
+
+- Requires an `sk-...` API key
+- No GPU required on the host
+- `COMPOSE_PROFILES=lite` — vLLM is not started
+- Cost: billed per token by OpenAI
+
+### Option 2 — LexAI remote GPU (free)
+
+Sends requests to the operator's vLLM endpoint (Qwen3-14B-AWQ). No key required.
+
+- Rate-limited per IP by the nginx gateway
+- `COMPOSE_PROFILES=lite` — no local GPU needed
+- The operator must be running `scripts/serve.sh` for this to work
+
+### Option 3 — Local GPU
+
+Runs Qwen3-14B-AWQ on your own NVIDIA GPU(s).
+
+- Requires NVIDIA drivers and 24 GB VRAM minimum
+- `COMPOSE_PROFILES=full`
+- vLLM downloads the model (~8 GB) on first start
+- No external network dependency after download
+
+</details>
+
+---
+
+<details>
+<summary><strong>6. Abuse Protection</strong></summary>
+
+<br>
+
+The public GPU endpoint is protected at multiple layers:
+
+| Layer | Mechanism | Effect |
+|---|---|---|
+| vLLM | Concurrency limit | Excess requests queue rather than crash the service |
+| nginx | Rate limiting per IP | Returns 429 on excess requests |
+| nginx | Payload size limit | Rejects oversized payloads |
+| nginx | Endpoint allowlist | Only `/v1/chat/completions` is proxied; all other paths return 403 |
+| nginx | Auth header stripping | Strips client-supplied auth headers before proxying |
+| nginx | Real IP detection | Rate limiting uses the real client IP via Cloudflare headers |
+| Cloudflare | DDoS protection, TLS termination | Absorbs volumetric attacks before they reach the host |
+
+</details>
+
+---
+
+<details>
+<summary><strong>7. Configuration reference</strong></summary>
+
+<br>
+
+Config is loaded from `config/settings.yaml`. Any key can be overridden with an environment variable using the prefix `LD_` and double-underscore nesting (e.g. `LD_LLM__BASE_URL` overrides `llm.base_url`).
+
+| Env var | settings.yaml key | Default | Purpose |
+|---|---|---|---|
+| `LD_LLM__BASE_URL` | `llm.base_url` | `http://localhost:8080/v1` | LLM API endpoint |
+| `LD_LLM__MODEL` | `llm.model` | `Qwen/Qwen3-14B-AWQ` | Model name sent in API requests |
+| `LD_LLM__API_KEY` | `llm.api_key` | `local` | API key (`sk-...` for OpenAI) |
+| `LD_LLM__MAX_TOKENS` | `llm.max_tokens` | `4096` | Max tokens in LLM responses |
+| `LD_STORAGE__POSTGRES_DSN` | `storage.postgres_dsn` | *(set in .env)* | Postgres connection string |
+| `LD_STORAGE__VECTOR_STORE__HOST` | `storage.vector_store.host` | `localhost` | ChromaDB host |
+| `LD_STORAGE__VECTOR_STORE__PORT` | `storage.vector_store.port` | `8001` | ChromaDB port |
+| `LD_EMBEDDING__MODEL` | `embedding.model` | `BAAI/bge-large-en-v1.5` | Sentence-transformers model |
+| `LD_EMBEDDING__DEVICE` | `embedding.device` | `auto` | `auto`, `cpu`, or `cuda:N`. `auto` picks the GPU with the most free VRAM if CUDA is available, else CPU. |
+
+> **Embedding device:** Default is `auto`. When CUDA is available the model (BGE-large-en-v1.5, ~670 MiB in float16) is loaded on the GPU with the most free VRAM. Force CPU with `LD_EMBEDDING__DEVICE=cpu`.
+
+</details>
