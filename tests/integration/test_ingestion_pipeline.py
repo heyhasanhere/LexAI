@@ -9,8 +9,8 @@ Run with:
 import pytest
 from pathlib import Path
 
-CUAD_DIR = Path("sample_data/inputs/cuad")
-RVL_DIR = Path("sample_data/inputs/rvl_cdip")
+CUAD_DIR = Path("sample_data/cuad")
+RVL_DIR = Path("sample_data/rvl_cdip")
 
 pytestmark = pytest.mark.skipif(
     not CUAD_DIR.exists(),
