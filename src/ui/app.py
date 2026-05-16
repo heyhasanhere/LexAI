@@ -55,6 +55,8 @@ if "submit_result" not in st.session_state:
     st.session_state.submit_result = None
 if "evidence" not in st.session_state:
     st.session_state.evidence = None
+if "settings_api_key" not in st.session_state:
+    st.session_state.settings_api_key = ""
 
 
 # ── API helpers ────────────────────────────────────────────────────────────────
@@ -80,6 +82,13 @@ def _delete(path: str) -> bool:
         return r.status_code in (200, 204)
     except Exception:
         return False
+
+
+def _patch(path: str, json: dict, timeout: int = 10):
+    try:
+        return requests.patch(f"{API}{path}", json=json, timeout=timeout)
+    except Exception:
+        return None
 
 
 def _badge(status: str) -> str:
@@ -138,8 +147,8 @@ with st.sidebar:
 
     st.divider()
 
-    page_map = {"Process": "process", "Review & Learn": "review", "Patterns": "patterns"}
-    idx_map = {"process": 0, "review": 1, "patterns": 2}
+    page_map = {"Process": "process", "Review & Learn": "review", "Patterns": "patterns", "Settings": "settings"}
+    idx_map = {"process": 0, "review": 1, "patterns": 2, "settings": 3}
     nav = st.radio(
         "Navigation",
         list(page_map.keys()),
@@ -805,6 +814,89 @@ def render_patterns():
                         st.error("Failed")
 
 
+# ── Page: Settings ──────────────────────────────────────────────────────────────
+_PROVIDER_DEFAULTS = {
+    "vllm":       ("http://localhost:8080/v1", "Qwen/Qwen3-4B-AWQ"),
+    "groq":       ("https://api.groq.com/openai/v1", "llama-3.1-8b-instant"),
+    "openrouter": ("https://openrouter.ai/api/v1", "meta-llama/llama-3.1-8b-instruct:free"),
+    "gemini":     ("https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.0-flash-lite"),
+    "mistral":    ("https://api.mistral.ai/v1", "mistral-small-latest"),
+    "together":   ("https://api.together.xyz/v1", "meta-llama/Llama-3.2-3B-Instruct-Turbo"),
+    "openai":     ("https://api.openai.com/v1", "gpt-4o-mini"),
+}
+
+def render_settings():
+    st.markdown("## LLM Settings")
+    st.caption("Changes take effect immediately for all new requests. Restart resets to defaults from settings.yaml.")
+
+    current = _get("/config/llm")
+    if not current:
+        st.error("Could not reach the API.")
+        return
+
+    st.markdown(
+        f'**Active:** `{current["provider"]}` · `{current["model"]}` · '
+        f'`{current["base_url"]}` · '
+        f'API key: {"set" if current["api_key_set"] else "not set"} · '
+        f'max_tokens: `{current["max_tokens"]}`'
+    )
+    st.divider()
+
+    providers = list(_PROVIDER_DEFAULTS.keys())
+    cur_provider = current.get("provider", "vllm")
+    provider_idx = providers.index(cur_provider) if cur_provider in providers else 0
+
+    provider = st.selectbox(
+        "Provider",
+        providers,
+        index=provider_idx,
+        help="Selecting a provider auto-fills the base URL and a default model.",
+    )
+
+    default_url, default_model = _PROVIDER_DEFAULTS[provider]
+    # If switching provider, suggest its defaults; otherwise keep current values
+    suggest_url = default_url if provider != cur_provider else current["base_url"]
+    suggest_model = default_model if provider != cur_provider else current["model"]
+
+    col1, col2 = st.columns(2)
+    model = col1.text_input("Model", value=suggest_model)
+    base_url = col2.text_input(
+        "Base URL",
+        value=suggest_url,
+        disabled=(provider != "vllm"),
+        help="Only editable for vLLM. Other providers use fixed endpoints.",
+    )
+
+    api_key = st.text_input(
+        "API key",
+        value=st.session_state.settings_api_key,
+        type="password",
+        placeholder="Leave blank to keep existing key" if current["api_key_set"] else "Enter API key",
+    )
+    st.session_state.settings_api_key = api_key
+
+    max_tokens = st.slider("Max tokens", min_value=256, max_value=8192, value=current["max_tokens"], step=256)
+
+    if st.button("Apply", type="primary"):
+        payload: dict = {"provider": provider, "model": model, "max_tokens": max_tokens}
+        if provider == "vllm":
+            payload["base_url"] = base_url
+        if api_key:
+            payload["api_key"] = api_key
+
+        r = _patch("/config/llm", payload)
+        if r and r.ok:
+            st.session_state.settings_api_key = ""
+            st.success(
+                f"Updated: `{r.json()['provider']}` / `{r.json()['model']}` — "
+                f"max_tokens={r.json()['max_tokens']}"
+            )
+            st.rerun()
+        else:
+            detail = r.json().get("detail", r.text) if r else "Request failed"
+            st.error(f"Failed: {detail}")
+
+
 # ── Router ──────────────────────────────────────────────────────────────────────
 if st.session_state.page == "process":
     render_process()
@@ -812,3 +904,5 @@ elif st.session_state.page == "review":
     render_review()
 elif st.session_state.page == "patterns":
     render_patterns()
+elif st.session_state.page == "settings":
+    render_settings()
