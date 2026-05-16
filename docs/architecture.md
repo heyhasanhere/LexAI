@@ -64,7 +64,7 @@ LexAI is a pipeline system. Each stage has a single responsibility and a defined
 Field extraction (`src/extraction/field_extractor.py`) uses a multi-turn chunking strategy to handle documents that exceed the LLM's context window:
 
 1. `load_document` produces page-annotated text with `[PAGE N]` markers at each page boundary.
-2. `extract_fields` calls `_split_into_page_chunks` which splits on `[PAGE N]` boundaries into chunks of at most `max_chunk_chars` (default 40,000 characters, ≈ 10,000 tokens).
+2. `extract_fields` calls `_split_into_page_chunks` which splits on `[PAGE N]` boundaries into chunks of at most `max_chunk_chars` (default 28,000 characters, ≈ 7,000 tokens).
 3. One LLM call is made per chunk. Each call receives the same extraction prompt and returns a partial `ExtractedFields` JSON.
 4. `_merge_fields` combines all partial results:
    - All list fields (parties, key\_dates, key\_clauses, etc.) are concatenated across chunks.
@@ -76,10 +76,10 @@ Field extraction (`src/extraction/field_extractor.py`) uses a multi-turn chunkin
 
 ```
 prompt template:  ~700 tokens
-document chunk:  ~10,000 tokens  (40,000 chars ÷ 4 chars/token)
+document chunk:  ~7,000 tokens  (28,000 chars ÷ 4 chars/token)
 LLM response:     4,096 tokens
 ─────────────────────────────
-total:           ~14,796 tokens  <  16,384 ✓
+total:           ~11,796 tokens  <  16,384 ✓
 ```
 
 ---

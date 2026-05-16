@@ -24,30 +24,50 @@ Represents a single ingested file. Tracks processing status and stores the struc
 
 ## ExtractedFields
 
-Structured output of the field extraction step. All fields are nullable — the LLM returns `null` for anything it cannot extract with confidence, and explains why in `extraction_notes`.
+Structured output of the field extraction step. All list fields default to empty; `document_type` and `risk_summary` default to `null`. The LLM omits sections it finds no evidence for and records ambiguities in `extraction_notes`. The applicable sections vary by document type.
 
 | Field | Type | Notes |
 |---|---|---|
-| `document_type` | string | e.g. `deed_of_trust`, `lien_release`, `title_commitment` |
-| `parties` | Party[] | list of all identified parties with roles |
-| `property_address` | string | |
-| `legal_description` | string | |
-| `recording_date` | date | |
-| `instrument_number` | string | |
-| `loan_amount` | float | |
-| `maturity_date` | date | |
-| `notary_present` | bool | |
-| `key_value_pairs` | list | catch-all for fields not covered above |
-| `extraction_notes` | string | |
+| `document_type` | string \| null | e.g. `contract`, `deed`, `invoice`, `medical_record` |
+| `parties` | Party[] | all named people and organisations with roles |
+| `key_dates` | KeyDate[] | all dates that matter (signing, deadlines, expirations) |
+| `key_clauses` | KeyClause[] | important terms, conditions, and provisions |
+| `flags_and_risks` | FlagRisk[] | both quality issues and substantive risks |
+| `matter_timeline` | TimelineEvent[] | chronological events and milestones |
+| `obligation_tracker` | Obligation[] | obligations per party with due dates or conditions |
+| `risk_summary` | RiskSummary \| null | overall risk level with itemised breakdown |
+| `clause_library` | ClauseEntry[] | verbatim or near-verbatim extracted clauses |
+| `party_profile` | PartyProfile[] | entity summaries with identifiers |
+| `due_diligence_checklist` | ChecklistItem[] | expected elements with found/missing status |
+| `anomaly_report` | Anomaly[] | deviations from standard structure or wording |
+| `transcript_summary` | TranscriptEntry[] | speaker statements from depositions or hearings |
+| `case_law_citations` | CaseLaw[] | referenced cases or statutes with context |
+| `document_gap_report` | GapEntry[] | expected elements with Present/Missing/Illegible status |
+| `audit_trail` | AuditEntry[] | actor, action, and timestamp records |
+| `source_grounding` | GroundingEntry[] | important facts not captured in other sections |
+| `extraction_notes` | string \| null | LLM commentary on the document and extraction quality |
+| `flags` | string[] | structural/quality issues only (missing pages, OCR problems, truncated content) |
 
-**Party sub-entity:**
+**Sub-entity schemas:**
 
-| Field | Type | Notes |
-|---|---|---|
-| `role` | string | `grantor`, `grantee`, `trustee`, `beneficiary`, etc. |
-| `name` | string | |
-| `entity_type` | string | `individual`, `trust`, `corporation`, `llc` |
-| `confidence` | enum | `high`, `medium`, `low` |
+| Sub-entity | Fields |
+|---|---|
+| Party | `role`, `name`, `identifier`, `page` |
+| KeyDate | `label`, `date`, `page`, `alert` |
+| KeyClause | `name`, `value`, `page` |
+| FlagRisk | `description`, `page` |
+| TimelineEvent | `date`, `event`, `page` |
+| Obligation | `party`, `obligation`, `due`, `page` |
+| RiskSummary | `overall`, `level` (High\|Medium\|Low), `items: [{ severity, description, page }]` |
+| ClauseEntry | `clause_type`, `text`, `page` |
+| PartyProfile | `entity`, `role`, `identifiers`, `page` |
+| ChecklistItem | `item`, `found` (bool), `page` |
+| Anomaly | `clause`, `deviation`, `page` |
+| TranscriptEntry | `speaker`, `statement`, `page` |
+| CaseLaw | `case`, `context`, `page` |
+| GapEntry | `expected`, `status` (Present\|Missing\|Illegible) |
+| AuditEntry | `actor`, `action`, `timestamp`, `page` |
+| GroundingEntry | `field`, `value`, `page` |
 
 ---
 
@@ -91,15 +111,13 @@ A generated Case Fact Summary, capturing both the system-generated version and t
 
 ## Citation
 
-Maps a span in the draft text back to the specific source chunk that supports it.
+Maps a span in the draft text back to the specific source chunk that supports it. Citations are embedded in the `citations_json` column of the `drafts` table — they are not stored as a separate table.
 
 | Field | Type | Notes |
 |---|---|---|
-| `citation_id` | string | |
-| `draft_id` | string | |
 | `document_id` | string | |
-| `chunk_id` | string | |
-| `draft_char_start` | int | location of citation in draft text |
+| `chunk_id` | string | `{document_id}-chunk-{index}` |
+| `draft_char_start` | int | character offset of the citation marker in the draft text |
 | `draft_char_end` | int | |
 
 ---
