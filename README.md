@@ -1,5 +1,7 @@
 # LexAI — Legal Document Analysis Platform
 
+<!-- live-demo --> **[▶ Open Live Demo](https://developments-changes-backgrounds-lock.trycloudflare.com)**
+
 LexAI ingests legal documents, extracts structured fields via LLM, retrieves relevant precedents from a vector store, generates grounded draft summaries with inline citations, and learns from operator edits to improve future drafts.
 
 ---
