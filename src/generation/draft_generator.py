@@ -3,9 +3,7 @@ from dataclasses import dataclass, field
 
 from openai import OpenAI
 
-from src.extraction.field_extractor import _vllm_extra
-
-from src.extraction.field_extractor import ExtractedFields
+from src.extraction.field_extractor import ExtractedFields, _vllm_extra
 from src.generation.prompts import build_prompt
 from src.retrieval.vector_store import RetrievedChunk
 from src.utils.logger import get_logger
