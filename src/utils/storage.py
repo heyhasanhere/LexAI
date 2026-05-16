@@ -30,6 +30,23 @@ CREATE TABLE IF NOT EXISTS drafts (
     citations_json       JSONB,
     patterns_used        TEXT[]
 );
+
+CREATE TABLE IF NOT EXISTS edit_patterns (
+    pattern_id       TEXT PRIMARY KEY,
+    document_type    TEXT,
+    section          TEXT NOT NULL,
+    edit_type        TEXT NOT NULL,
+    trigger          TEXT NOT NULL,
+    original_text    TEXT NOT NULL,
+    corrected_text   TEXT NOT NULL,
+    frequency        INTEGER NOT NULL DEFAULT 1,
+    first_seen       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    source_draft_ids TEXT[]
+);
+
+CREATE INDEX IF NOT EXISTS idx_edit_patterns_lookup
+    ON edit_patterns (document_type, section, edit_type);
 """
 
 
