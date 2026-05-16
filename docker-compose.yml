@@ -57,12 +57,20 @@ services:
     environment:
       - LD_STORAGE__POSTGRES_DSN=postgresql://ld:ld@postgres:5432/lexai
       - LD_STORAGE__VECTOR_STORE__HOST=chromadb
+      - LD_STORAGE__VECTOR_STORE__PORT=8000
     command: uvicorn src.api.routes:app --host 0.0.0.0 --port 8000
     depends_on:
       postgres:
         condition: service_healthy
       chromadb:
         condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
@@ -104,7 +112,7 @@ services:
       --model Qwen/Qwen3-14B-AWQ
       --tensor-parallel-size 2
       --max-model-len 16384
-      --gpu-memory-utilization 0.80
+      --gpu-memory-utilization 0.70
       --dtype bfloat16
       --enforce-eager
       --max-num-seqs 4
