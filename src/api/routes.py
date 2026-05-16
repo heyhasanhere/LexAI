@@ -3,9 +3,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import psycopg2.extras
 import pytesseract
 import yaml
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from src.api.schemas import (
@@ -31,10 +32,10 @@ from src.learning.edit_tracker import classify_edits, diff_drafts
 from src.learning.pattern_store import (
     delete_pattern,
     get_patterns,
-    init_db as init_pattern_db,
     upsert_pattern,
 )
 from src.retrieval.vector_store import delete_by_document, query as vector_query, upsert_chunks
+from src.utils.db import get_conn as _db_conn, init_pool
 from src.utils.logger import get_logger
 from src.utils.storage import (
     create_document,
@@ -100,12 +101,49 @@ _RETRIEVAL_QUERIES: list[str] = (
     ]
 )
 
+# ── OCR ────────────────────────────────────────────────────────────────────────
+_ocr_cfg = _cfg.get("ocr", {})
+OCR_DPI = int(_ocr_cfg.get("dpi", 300))
+OCR_IMAGE_ONLY_THRESHOLD = int(_ocr_cfg.get("image_only_threshold", 100))
+_pre = _ocr_cfg.get("preprocessing", {})
+_tess = _ocr_cfg.get("tesseract", {})
+OCR_KWARGS: dict = {
+    "deskew": bool(_pre.get("deskew", True)),
+    "denoise": bool(_pre.get("denoise", True)),
+    "contrast_enhance": bool(_pre.get("contrast_enhance", True)),
+    "binarize": bool(_pre.get("binarize", True)),
+    "lang": str(_ocr_cfg.get("language", "eng")),
+    "oem": int(_tess.get("oem", 3)),
+    "psm": int(_tess.get("psm", 6)),
+}
+
+# ── Chunking ───────────────────────────────────────────────────────────────────
+_chunk_cfg = _cfg.get("chunking", {})
+CHUNK_SIZE = int(_chunk_cfg.get("chunk_size", 512))
+CHUNK_OVERLAP = int(_chunk_cfg.get("overlap", 64))
+MIN_CHUNK_SIZE = int(_chunk_cfg.get("min_chunk_size", 50))
+
+# ── Retrieval ──────────────────────────────────────────────────────────────────
+_ret_cfg = _cfg.get("retrieval", {})
+RETRIEVAL_TOP_K = int(_ret_cfg.get("top_k", 3))
+RETRIEVAL_MIN_SCORE = float(_ret_cfg.get("min_score", 0.35))
+EVIDENCE_MIN_SCORE = float(_ret_cfg.get("evidence_min_score", 0.25))
+
+# ── Generation ─────────────────────────────────────────────────────────────────
+GENERATION_TEMPERATURE = float(_cfg.get("generation", {}).get("temperature", 0.1))
+
+# ── Learning ───────────────────────────────────────────────────────────────────
+_learn_cfg = _cfg.get("learning", {})
+LEARN_MIN_FREQ = int(_learn_cfg.get("min_frequency_threshold", 3))
+LEARN_MAX_PATTERNS = int(_learn_cfg.get("max_patterns_per_prompt", 5))
+LEARN_DEDUP_THRESHOLD = float(_learn_cfg.get("dedup_similarity_threshold", 0.2))
+
 
 @app.on_event("startup")
 def startup() -> None:
     DOCUMENT_DIR.mkdir(parents=True, exist_ok=True)
+    init_pool(DSN)
     init_db(DSN)
-    init_pattern_db(DSN)
     logger.info("LexAI API started")
 
 
@@ -119,8 +157,8 @@ def health() -> HealthResponse:
     ocr_ok = True
 
     try:
-        import psycopg2
-        psycopg2.connect(DSN).close()
+        with _db_conn(DSN) as _:
+            pass
     except Exception:
         db_status = "unavailable"
 
@@ -146,25 +184,36 @@ def health() -> HealthResponse:
 
 @app.post("/documents", response_model=DocumentUploadResponse, status_code=202)
 def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     document_type_hint: str | None = Form(None),
 ) -> DocumentUploadResponse:
-    document_id = create_document(file.filename, _file_type(file.filename), DSN)
+    data = file.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds the {MAX_UPLOAD_BYTES // (1024*1024)} MB upload limit.",
+        )
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp:
-        data = file.file.read(MAX_UPLOAD_BYTES + 1)
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File exceeds the {MAX_UPLOAD_BYTES // (1024*1024)} MB upload limit.",
-            )
         tmp.write(data)
         tmp_path = Path(tmp.name)
 
+    document_id = create_document(file.filename, _file_type(file.filename), DSN)
+    background_tasks.add_task(_ingest_document, document_id, tmp_path, document_type_hint)
+
+    return DocumentUploadResponse(
+        document_id=document_id,
+        filename=file.filename,
+        status="processing",
+    )
+
+
+def _ingest_document(document_id: str, tmp_path: Path, document_type_hint: str | None) -> None:
     try:
         update_document(document_id, "processing", DSN)
 
-        loaded = load_document(tmp_path)
+        loaded = load_document(tmp_path, ocr_kwargs=OCR_KWARGS, dpi=OCR_DPI, image_only_threshold=OCR_IMAGE_ONLY_THRESHOLD)
         pages = [(p.page_number, p.text, p.ocr_confidence) for p in loaded.pages]
         flags = loaded.flags
 
@@ -177,10 +226,10 @@ def upload_document(
         if document_type_hint and not fields.document_type:
             fields.document_type = document_type_hint
 
-        chunks = chunk_document(document_id, pages)
+        chunks = chunk_document(document_id, pages, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP, min_chunk_size=MIN_CHUNK_SIZE)
         upsert_chunks(chunks, device=EMBED_DEVICE, host=CHROMA_HOST, port=CHROMA_PORT)
 
-        dest = DOCUMENT_DIR / f"{document_id}{Path(file.filename).suffix}"
+        dest = DOCUMENT_DIR / f"{document_id}{tmp_path.suffix}"
         shutil.move(str(tmp_path), dest)
 
         update_document(
@@ -196,13 +245,6 @@ def upload_document(
         logger.error(f"Ingestion failed for {document_id}: {e}")
         update_document(document_id, "failed", DSN, error_detail=str(e))
         tmp_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return DocumentUploadResponse(
-        document_id=document_id,
-        filename=file.filename,
-        status="ready",
-    )
 
 
 @app.get("/documents", response_model=DocumentListResponse)
@@ -250,13 +292,13 @@ def create_draft_endpoint(req: DraftRequest) -> DraftResponse:
         None,
     )
     sections = ["parties", "key_dates", "key_clauses", "flags_and_risks", "obligation_tracker"]
-    patterns = get_patterns(doc_type, sections, DSN)
+    patterns = get_patterns(doc_type, sections, DSN, limit=LEARN_MAX_PATTERNS, min_frequency=LEARN_MIN_FREQ)
 
     chunks = vector_query(
         queries=_RETRIEVAL_QUERIES,
         document_ids=req.document_ids,
-        top_k=2,
-        min_score=0.35,
+        top_k=RETRIEVAL_TOP_K,
+        min_score=RETRIEVAL_MIN_SCORE,
         host=CHROMA_HOST,
         port=CHROMA_PORT,
         device=EMBED_DEVICE,
@@ -280,6 +322,7 @@ def create_draft_endpoint(req: DraftRequest) -> DraftResponse:
             base_url=LLM_BASE_URL,
             model=LLM_MODEL,
             api_key=LLM_API_KEY,
+            temperature=GENERATION_TEMPERATURE,
             max_tokens=LLM_MAX_TOKENS,
             doc_meta=doc_meta,
         )
@@ -351,7 +394,7 @@ def submit_draft_endpoint(draft_id: str, req: SubmitDraftRequest) -> SubmitDraft
         candidates = diff_drafts(row["original_text"], req.submitted_text)
         classified = classify_edits(candidates, doc_type, base_url=LLM_BASE_URL, model=LLM_MODEL, api_key=LLM_API_KEY)
         for edit in classified:
-            pid = upsert_pattern(edit, doc_type, draft_id, DSN)
+            pid = upsert_pattern(edit, doc_type, draft_id, DSN, dedup_threshold=LEARN_DEDUP_THRESHOLD)
             pattern_ids.append(pid)
     except Exception as e:
         logger.error(f"Edit classification failed for draft {draft_id}: {e}")
@@ -375,8 +418,8 @@ def get_draft_evidence(draft_id: str) -> list[dict]:
         chunks = vector_query(
             queries=_RETRIEVAL_QUERIES,
             document_ids=row["document_ids"],
-            top_k=3,
-            min_score=0.25,
+            top_k=RETRIEVAL_TOP_K,
+            min_score=EVIDENCE_MIN_SCORE,
             host=CHROMA_HOST,
             port=CHROMA_PORT,
             device=EMBED_DEVICE,
@@ -406,9 +449,7 @@ def list_patterns(
     section: str | None = Query(None),
     min_frequency: int = Query(1, ge=1),
 ) -> PatternListResponse:
-    import psycopg2
-    import psycopg2.extras
-    with psycopg2.connect(DSN) as conn:
+    with _db_conn(DSN) as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             conditions = ["frequency >= %s"]
             params: list = [min_frequency]
@@ -456,12 +497,10 @@ def delete_document_endpoint(document_id: str) -> None:
 
 @app.post("/admin/reset")
 def admin_reset() -> dict:
-    import psycopg2
     import chromadb
     from chromadb.config import Settings
 
-    with psycopg2.connect(DSN) as conn:
-        conn.autocommit = True
+    with _db_conn(DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE drafts, documents, edit_patterns RESTART IDENTITY CASCADE")
 

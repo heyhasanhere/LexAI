@@ -2,8 +2,9 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-import psycopg2
 import psycopg2.extras
+
+from src.utils.db import get_conn as _connect
 
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -48,12 +49,6 @@ CREATE TABLE IF NOT EXISTS edit_patterns (
 CREATE INDEX IF NOT EXISTS idx_edit_patterns_lookup
     ON edit_patterns (document_type, section, edit_type);
 """
-
-
-def _connect(dsn: str) -> psycopg2.extensions.connection:
-    conn = psycopg2.connect(dsn)
-    conn.autocommit = True
-    return conn
 
 
 def init_db(dsn: str) -> None:

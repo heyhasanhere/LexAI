@@ -473,7 +473,7 @@ def render_process():
                 if resp and resp.ok:
                     doc_id = resp.json()["document_id"]
                     _load_doc(doc_id)
-                    st.success(f"Ingested — `{doc_id}`")
+                    st.success(f"Uploaded — processing in background. Refresh to see results.")
                     st.rerun()
                 else:
                     detail = resp.json().get("detail", resp.text) if resp else "Request failed"

@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime, timezone
 
-import psycopg2
 import psycopg2.extras
+
+from src.utils.db import get_conn as _connect
 
 from src.learning.edit_tracker import ClassifiedEdit
 from src.utils.logger import get_logger
@@ -11,37 +12,6 @@ logger = get_logger(__name__)
 
 DEDUP_THRESHOLD = 0.2  # normalized edit distance below this = near-duplicate
 MIN_FREQUENCY = 3      # patterns below this are stored but not injected into prompts
-
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS edit_patterns (
-    pattern_id      TEXT PRIMARY KEY,
-    document_type   TEXT,
-    section         TEXT NOT NULL,
-    edit_type       TEXT NOT NULL,
-    trigger         TEXT NOT NULL,
-    original_text   TEXT NOT NULL,
-    corrected_text  TEXT NOT NULL,
-    frequency       INTEGER NOT NULL DEFAULT 1,
-    first_seen      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_seen       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    source_draft_ids TEXT[]
-);
-CREATE INDEX IF NOT EXISTS idx_edit_patterns_lookup
-    ON edit_patterns (document_type, section, edit_type);
-"""
-
-
-def _connect(dsn: str) -> psycopg2.extensions.connection:
-    conn = psycopg2.connect(dsn)
-    conn.autocommit = True
-    return conn
-
-
-def init_db(dsn: str) -> None:
-    with _connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(CREATE_TABLE_SQL)
-    logger.info("edit_patterns table ensured")
 
 
 def _edit_distance_ratio(a: str, b: str) -> float:
@@ -54,6 +24,7 @@ def upsert_pattern(
     document_type: str | None,
     draft_id: str,
     dsn: str,
+    dedup_threshold: float = DEDUP_THRESHOLD,
 ) -> str:
     with _connect(dsn) as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -69,7 +40,7 @@ def upsert_pattern(
             existing = cur.fetchall()
 
             for row in existing:
-                if _edit_distance_ratio(edit.trigger, row["trigger"]) < DEDUP_THRESHOLD:
+                if _edit_distance_ratio(edit.trigger, row["trigger"]) < dedup_threshold:
                     cur.execute(
                         """
                         UPDATE edit_patterns
@@ -113,6 +84,7 @@ def get_patterns(
     sections: list[str],
     dsn: str,
     limit: int = 5,
+    min_frequency: int = MIN_FREQUENCY,
 ) -> list[dict]:
     with _connect(dsn) as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -126,7 +98,7 @@ def get_patterns(
                 ORDER BY frequency DESC
                 LIMIT %s
                 """,
-                (document_type, sections, MIN_FREQUENCY, limit),
+                (document_type, sections, min_frequency, limit),
             )
             return [dict(row) for row in cur.fetchall()]
 
