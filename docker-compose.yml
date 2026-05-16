@@ -37,7 +37,7 @@ services:
     environment:
       - ALLOW_RESET=true
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -64,6 +64,9 @@ services:
         condition: service_healthy
       chromadb:
         condition: service_started
+      vllm:
+        condition: service_healthy
+        required: false
     deploy:
       resources:
         reservations:
