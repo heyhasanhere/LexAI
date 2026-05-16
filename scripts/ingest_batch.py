@@ -24,7 +24,7 @@ logger = get_logger("ingest_batch")
 
 DSN = "postgresql://ld:ld@localhost:5432/lexai"
 LLM_BASE_URL = "http://localhost:8080/v1"
-LLM_MODEL = "mistralai/Mistral-Small-3.1-24B-Instruct"
+LLM_MODEL = "Qwen/Qwen3-14B-AWQ"
 CHROMA_HOST = "localhost"
 CHROMA_PORT = 8001
 EMBED_DEVICE = "cuda"
@@ -45,7 +45,7 @@ def ingest_file(path: Path) -> str | None:
         update_document(document_id, "processing", DSN)
         loaded = load_document(path)
 
-        fields = extract_fields(loaded.full_text, base_url=LLM_BASE_URL, model=LLM_MODEL)
+        fields = extract_fields(loaded.page_annotated_text, base_url=LLM_BASE_URL, model=LLM_MODEL)
         pages = [(p.page_number, p.text, p.ocr_confidence) for p in loaded.pages]
         chunks = chunk_document(document_id, pages)
         upsert_chunks(chunks, device=EMBED_DEVICE, host=CHROMA_HOST, port=CHROMA_PORT)
