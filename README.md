@@ -4,10 +4,7 @@ LexAI ingests legal documents, extracts structured fields via LLM, retrieves rel
 
 ---
 
-<details>
-<summary><strong>1. Installation</strong></summary>
-
-<br>
+## 1. Installation
 
 <details>
 <summary><strong>Use LexAI from a browser</strong></summary>
@@ -54,8 +51,6 @@ After installation:
 
 To stop: `docker compose --project-directory ~/lexai down`  
 To restart: `docker compose --project-directory ~/lexai up -d`
-
----
 
 <details>
 <summary><strong>Self-host LexAI (expose your own GPU)</strong></summary>
@@ -150,14 +145,9 @@ Press `Ctrl-C` to stop both tunnels.
 
 </details>
 
-</details>
-
 ---
 
-<details>
-<summary><strong>2. Architecture</strong></summary>
-
-<br>
+## 2. Architecture
 
 ```
 Browser
@@ -191,16 +181,9 @@ Semantic queries → ChromaDB top-k retrieval → load generalizable edit patter
 **Edit learning** (`POST /drafts/{id}/submit`)  
 Operator submits corrected draft text → difflib line-level diff against original → LLM classifies each changed hunk (edit type, when to apply, whether generalizable) → only edits marked `generalizable=true` stored in the `edit_patterns` Postgres table → patterns that meet the frequency threshold are injected as few-shot examples into future generation prompts.
 
-</details>
-
 ---
 
-<details>
-<summary><strong>3. Development Setup</strong></summary>
-
-<br>
-
-For local development (backing services via Docker, app code running directly):
+## 3. Development Setup
 
 ```bash
 # Install system dependencies (Ubuntu)
@@ -235,14 +218,9 @@ python scripts/simulate_edits.py
 python scripts/reset.py
 ```
 
-</details>
-
 ---
 
-<details>
-<summary><strong>4. More about installations</strong></summary>
-
-<br>
+## 4. More about installations
 
 <details>
 <summary><strong>How install.sh works internally</strong></summary>
@@ -285,8 +263,6 @@ Polls `http://localhost:8000/health` every 5 seconds for up to 150 seconds. Prin
 
 </details>
 
----
-
 <details>
 <summary><strong>How serve.sh works internally</strong></summary>
 
@@ -313,14 +289,9 @@ Each tunnel process pipes its stderr through `parse_tunnel`, which watches for t
 
 </details>
 
-</details>
-
 ---
 
-<details>
-<summary><strong>5. LLM backend</strong></summary>
-
-<br>
+## 5. LLM backend
 
 ### Option 1 — OpenAI API
 
@@ -348,14 +319,9 @@ Runs Qwen3-14B-AWQ on your own NVIDIA GPU(s).
 - vLLM downloads the model (~8 GB) on first start
 - No external network dependency after download
 
-</details>
-
 ---
 
-<details>
-<summary><strong>6. Abuse Protection</strong></summary>
-
-<br>
+## 6. Abuse Protection
 
 The public GPU endpoint is protected at multiple layers:
 
@@ -369,14 +335,9 @@ The public GPU endpoint is protected at multiple layers:
 | nginx | Real IP detection | Rate limiting uses the real client IP via Cloudflare headers |
 | Cloudflare | DDoS protection, TLS termination | Absorbs volumetric attacks before they reach the host |
 
-</details>
-
 ---
 
-<details>
-<summary><strong>7. Configuration reference</strong></summary>
-
-<br>
+## 7. Configuration reference
 
 Config is loaded from `config/settings.yaml`. Any key can be overridden with an environment variable using the prefix `LD_` and double-underscore nesting (e.g. `LD_LLM__BASE_URL` overrides `llm.base_url`).
 
@@ -393,5 +354,3 @@ Config is loaded from `config/settings.yaml`. Any key can be overridden with an 
 | `LD_EMBEDDING__DEVICE` | `embedding.device` | `auto` | `auto`, `cpu`, or `cuda:N`. `auto` picks the GPU with the most free VRAM if CUDA is available, else CPU. |
 
 > **Embedding device:** Default is `auto`. When CUDA is available the model (BGE-large-en-v1.5, ~670 MiB in float16) is loaded on the GPU with the most free VRAM. Force CPU with `LD_EMBEDDING__DEVICE=cpu`.
-
-</details>
