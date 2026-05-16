@@ -3,17 +3,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-
-def _vllm_extra(base_url: str) -> dict:
-    """Return extra_body for Qwen3 thinking suppression when talking to vLLM.
-    OpenAI's API rejects unknown extra_body fields, so we only send this for
-    non-OpenAI endpoints."""
-    if "openai.com" in base_url:
-        return {}
-    return {"chat_template_kwargs": {"enable_thinking": False}}
-
-from openai import OpenAI
-
+from src.utils.llm_client import chat_extra_body, get_client
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -112,20 +102,21 @@ class ExtractedFields:
 def extract_fields(
     text: str,
     base_url: str = "http://localhost:8080/v1",
-    model: str = "Qwen/Qwen3-14B-AWQ",
+    model: str = "Qwen/Qwen3-4B-AWQ",
     api_key: str = "local",
+    provider: str = "vllm",
     max_tokens: int = 3072,
     max_chunk_chars: int = 28000,
 ) -> ExtractedFields:
     chunks = _split_into_page_chunks(text, max_chunk_chars)
     if len(chunks) == 1:
-        return _extract_single(chunks[0], base_url, model, api_key, max_tokens)
+        return _extract_single(chunks[0], base_url, model, api_key, max_tokens, provider)
 
     logger.info(f"Document split into {len(chunks)} chunk(s) for multi-turn extraction")
     results = []
     for i, chunk in enumerate(chunks):
         logger.info(f"Extracting chunk {i + 1}/{len(chunks)}")
-        results.append(_extract_single(chunk, base_url, model, api_key, max_tokens))
+        results.append(_extract_single(chunk, base_url, model, api_key, max_tokens, provider))
 
     return _merge_fields(results)
 
@@ -156,8 +147,9 @@ def _extract_single(
     model: str,
     api_key: str,
     max_tokens: int,
+    provider: str = "vllm",
 ) -> ExtractedFields:
-    client = OpenAI(base_url=base_url, api_key=api_key)
+    client = get_client(provider, base_url, api_key)
     prompt = EXTRACTION_PROMPT.format(text=text)
 
     try:
@@ -166,7 +158,7 @@ def _extract_single(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
             temperature=0.0,
-            extra_body=_vllm_extra(base_url),
+            extra_body=chat_extra_body(provider),
         )
         raw = response.choices[0].message.content.strip()
 

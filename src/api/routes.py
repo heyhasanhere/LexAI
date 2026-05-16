@@ -4,7 +4,6 @@ import tempfile
 from pathlib import Path
 
 import psycopg2.extras
-import pytesseract
 import yaml
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
@@ -19,6 +18,8 @@ from src.api.schemas import (
     ErrorResponse,
     ExtractedFieldsSchema,
     HealthResponse,
+    LLMConfigResponse,
+    LLMConfigUpdate,
     PatternListResponse,
     PatternResponse,
     SubmitDraftRequest,
@@ -81,12 +82,13 @@ def _load_config() -> dict:
 _cfg = _load_config()
 
 DSN = _cfg.get("storage", {}).get("postgres_dsn", "postgresql://ld:ld@localhost:5432/lexai")
-CHROMA_HOST = _cfg.get("storage", {}).get("vector_store", {}).get("host", "localhost")
-CHROMA_PORT = _cfg.get("storage", {}).get("vector_store", {}).get("port", 8001)
-LLM_BASE_URL = _cfg.get("llm", {}).get("base_url", "http://localhost:8080/v1")
-LLM_MODEL = _cfg.get("llm", {}).get("model", "Qwen/Qwen3-14B-AWQ")
-LLM_API_KEY = _cfg.get("llm", {}).get("api_key", "local")
-LLM_MAX_TOKENS = int(_cfg.get("llm", {}).get("max_tokens", 2000))
+_llm: dict = {
+    "provider": _cfg.get("llm", {}).get("provider", "vllm"),
+    "base_url": _cfg.get("llm", {}).get("base_url", "http://localhost:8080/v1"),
+    "model": _cfg.get("llm", {}).get("model", "Qwen/Qwen3-4B-AWQ"),
+    "api_key": _cfg.get("llm", {}).get("api_key", "local"),
+    "max_tokens": int(_cfg.get("llm", {}).get("max_tokens", 2000)),
+}
 EMBED_DEVICE = _cfg.get("embedding", {}).get("device", "auto")
 DOCUMENT_DIR = Path(_cfg.get("storage", {}).get("document_dir", "./data/documents"))
 MAX_UPLOAD_BYTES = int(_cfg.get("server", {}).get("max_upload_size_mb", 50)) * 1024 * 1024
@@ -101,21 +103,12 @@ _RETRIEVAL_QUERIES: list[str] = (
     ]
 )
 
-# ── OCR ────────────────────────────────────────────────────────────────────────
-_ocr_cfg = _cfg.get("ocr", {})
-OCR_DPI = int(_ocr_cfg.get("dpi", 300))
-OCR_IMAGE_ONLY_THRESHOLD = int(_ocr_cfg.get("image_only_threshold", 100))
-_pre = _ocr_cfg.get("preprocessing", {})
-_tess = _ocr_cfg.get("tesseract", {})
-OCR_KWARGS: dict = {
-    "deskew": bool(_pre.get("deskew", True)),
-    "denoise": bool(_pre.get("denoise", True)),
-    "contrast_enhance": bool(_pre.get("contrast_enhance", True)),
-    "binarize": bool(_pre.get("binarize", True)),
-    "lang": str(_ocr_cfg.get("language", "eng")),
-    "oem": int(_tess.get("oem", 3)),
-    "psm": int(_tess.get("psm", 6)),
-}
+OCR_IMAGE_ONLY_THRESHOLD = int(_cfg.get("ocr", {}).get("image_only_threshold", 100))
+
+# ── Extraction ─────────────────────────────────────────────────────────────────
+_ext_cfg = _cfg.get("extraction", {})
+EXTRACTION_MAX_CHUNK_CHARS = int(_ext_cfg.get("max_chunk_chars", 12000))
+EXTRACTION_MAX_TOKENS = int(_ext_cfg.get("max_tokens", 1024))
 
 # ── Chunking ───────────────────────────────────────────────────────────────────
 _chunk_cfg = _cfg.get("chunking", {})
@@ -151,32 +144,18 @@ def startup() -> None:
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    import chromadb
-    vector_status = "connected"
     db_status = "connected"
-    ocr_ok = True
-
     try:
         with _db_conn(DSN) as _:
             pass
     except Exception:
         db_status = "unavailable"
 
-    try:
-        chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT).heartbeat()
-    except Exception:
-        vector_status = "unavailable"
-
-    try:
-        pytesseract.get_tesseract_version()
-    except Exception:
-        ocr_ok = False
-
     return HealthResponse(
         status="ok",
-        vector_store=vector_status,
+        vector_store=db_status,   # pgvector lives in the same Postgres instance
         database=db_status,
-        ocr_available=ocr_ok,
+        ocr_available=True,       # Marker loads on demand — no pre-check needed
     )
 
 
@@ -213,21 +192,24 @@ def _ingest_document(document_id: str, tmp_path: Path, document_type_hint: str |
     try:
         update_document(document_id, "processing", DSN)
 
-        loaded = load_document(tmp_path, ocr_kwargs=OCR_KWARGS, dpi=OCR_DPI, image_only_threshold=OCR_IMAGE_ONLY_THRESHOLD)
+        loaded = load_document(tmp_path, image_only_threshold=OCR_IMAGE_ONLY_THRESHOLD)
         pages = [(p.page_number, p.text, p.ocr_confidence) for p in loaded.pages]
         flags = loaded.flags
 
         fields = extract_fields(
             loaded.page_annotated_text,
-            base_url=LLM_BASE_URL,
-            model=LLM_MODEL,
-            api_key=LLM_API_KEY,
+            base_url=_llm["base_url"],
+            model=_llm["model"],
+            api_key=_llm["api_key"],
+            provider=_llm["provider"],
+            max_tokens=EXTRACTION_MAX_TOKENS,
+            max_chunk_chars=EXTRACTION_MAX_CHUNK_CHARS,
         )
         if document_type_hint and not fields.document_type:
             fields.document_type = document_type_hint
 
         chunks = chunk_document(document_id, pages, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP, min_chunk_size=MIN_CHUNK_SIZE)
-        upsert_chunks(chunks, device=EMBED_DEVICE, host=CHROMA_HOST, port=CHROMA_PORT)
+        upsert_chunks(chunks, device=EMBED_DEVICE, dsn=DSN)
 
         dest = DOCUMENT_DIR / f"{document_id}{tmp_path.suffix}"
         shutil.move(str(tmp_path), dest)
@@ -299,9 +281,8 @@ def create_draft_endpoint(req: DraftRequest) -> DraftResponse:
         document_ids=req.document_ids,
         top_k=RETRIEVAL_TOP_K,
         min_score=RETRIEVAL_MIN_SCORE,
-        host=CHROMA_HOST,
-        port=CHROMA_PORT,
         device=EMBED_DEVICE,
+        dsn=DSN,
     )
 
     doc_meta = {
@@ -319,11 +300,12 @@ def create_draft_endpoint(req: DraftRequest) -> DraftResponse:
             fields_by_doc=fields_by_doc,
             chunks=chunks,
             patterns=patterns,
-            base_url=LLM_BASE_URL,
-            model=LLM_MODEL,
-            api_key=LLM_API_KEY,
+            base_url=_llm["base_url"],
+            model=_llm["model"],
+            api_key=_llm["api_key"],
+            provider=_llm["provider"],
             temperature=GENERATION_TEMPERATURE,
-            max_tokens=LLM_MAX_TOKENS,
+            max_tokens=_llm["max_tokens"],
             doc_meta=doc_meta,
         )
     except ValueError as e:
@@ -392,7 +374,7 @@ def submit_draft_endpoint(draft_id: str, req: SubmitDraftRequest) -> SubmitDraft
     pattern_ids = []
     try:
         candidates = diff_drafts(row["original_text"], req.submitted_text)
-        classified = classify_edits(candidates, doc_type, base_url=LLM_BASE_URL, model=LLM_MODEL, api_key=LLM_API_KEY)
+        classified = classify_edits(candidates, doc_type, base_url=_llm["base_url"], model=_llm["model"], api_key=_llm["api_key"], provider=_llm["provider"])
         for edit in classified:
             pid = upsert_pattern(edit, doc_type, draft_id, DSN, dedup_threshold=LEARN_DEDUP_THRESHOLD)
             pattern_ids.append(pid)
@@ -420,9 +402,8 @@ def get_draft_evidence(draft_id: str) -> list[dict]:
             document_ids=row["document_ids"],
             top_k=RETRIEVAL_TOP_K,
             min_score=EVIDENCE_MIN_SCORE,
-            host=CHROMA_HOST,
-            port=CHROMA_PORT,
             device=EMBED_DEVICE,
+            dsn=DSN,
         )
         return [
             {
@@ -482,7 +463,7 @@ def delete_document_endpoint(document_id: str) -> None:
     if not row:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    delete_by_document(document_id, host=CHROMA_HOST, port=CHROMA_PORT)
+    delete_by_document(document_id, dsn=DSN)
 
     for suffix in (".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".txt"):
         f = DOCUMENT_DIR / f"{document_id}{suffix}"
@@ -493,26 +474,55 @@ def delete_document_endpoint(document_id: str) -> None:
     logger.info(f"Deleted document {document_id}")
 
 
+# ── LLM config ─────────────────────────────────────────────────────────────────
+
+@app.get("/config/llm", response_model=LLMConfigResponse)
+def get_llm_config() -> LLMConfigResponse:
+    return LLMConfigResponse(
+        provider=_llm["provider"],
+        base_url=_llm["base_url"],
+        model=_llm["model"],
+        api_key_set=bool(_llm["api_key"] and _llm["api_key"] != "local"),
+        max_tokens=_llm["max_tokens"],
+    )
+
+
+@app.patch("/config/llm", response_model=LLMConfigResponse)
+def update_llm_config(req: LLMConfigUpdate) -> LLMConfigResponse:
+    from src.utils.llm_client import _PROVIDER_URLS, PROVIDER_DEFAULT_MODELS
+
+    if req.provider is not None:
+        if req.provider not in _PROVIDER_URLS and req.provider != "vllm":
+            raise HTTPException(status_code=400, detail=f"Unknown provider '{req.provider}'")
+        _llm["provider"] = req.provider
+        # Auto-fill base_url and model from provider defaults if not explicitly set
+        if req.base_url is None:
+            _llm["base_url"] = _PROVIDER_URLS.get(req.provider, _llm["base_url"])
+        if req.model is None:
+            _llm["model"] = PROVIDER_DEFAULT_MODELS.get(req.provider, _llm["model"])
+
+    if req.base_url is not None:
+        _llm["base_url"] = req.base_url
+    if req.model is not None:
+        _llm["model"] = req.model
+    if req.api_key is not None:
+        _llm["api_key"] = req.api_key
+    if req.max_tokens is not None:
+        _llm["max_tokens"] = req.max_tokens
+
+    logger.info(f"LLM config updated: provider={_llm['provider']} model={_llm['model']}")
+    return get_llm_config()
+
+
 # ── Admin reset ────────────────────────────────────────────────────────────────
 
 @app.post("/admin/reset")
 def admin_reset() -> dict:
-    import chromadb
-    from chromadb.config import Settings
-
     with _db_conn(DSN) as conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE drafts, documents, edit_patterns RESTART IDENTITY CASCADE")
-
-    client = chromadb.HttpClient(
-        host=CHROMA_HOST, port=CHROMA_PORT,
-        settings=Settings(anonymized_telemetry=False),
-    )
-    try:
-        client.delete_collection("lexai_chunks")
-    except Exception:
-        pass
-    client.get_or_create_collection("lexai_chunks", metadata={"hnsw:space": "cosine"})
+            cur.execute(
+                "TRUNCATE TABLE chunks, drafts, documents, edit_patterns RESTART IDENTITY CASCADE"
+            )
 
     removed = 0
     for f in DOCUMENT_DIR.iterdir():

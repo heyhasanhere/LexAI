@@ -3,10 +3,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from src.extraction.field_extractor import _vllm_extra
-
-from openai import OpenAI
-
+from src.utils.llm_client import chat_extra_body, get_client
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -95,13 +92,14 @@ def classify_edits(
     candidates: list[EditCandidate],
     document_type: str | None,
     base_url: str = "http://localhost:8080/v1",
-    model: str = "Qwen/Qwen3-14B-AWQ",
+    model: str = "Qwen/Qwen3-4B-AWQ",
     api_key: str = "local",
+    provider: str = "vllm",
 ) -> list[ClassifiedEdit]:
     if not candidates:
         return []
 
-    client = OpenAI(base_url=base_url, api_key=api_key)
+    client = get_client(provider, base_url, api_key)
     classified = []
 
     for candidate in candidates:
@@ -118,7 +116,7 @@ def classify_edits(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_tokens=256,
-                extra_body=_vllm_extra(base_url),
+                extra_body=chat_extra_body(provider),
             )
             raw = response.choices[0].message.content.strip()
             if "<think>" in raw:

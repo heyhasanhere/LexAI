@@ -119,3 +119,19 @@ class ErrorResponse(BaseModel):
     error: str
     message: str
     detail: str | None = None
+
+
+class LLMConfigResponse(BaseModel):
+    provider: str
+    base_url: str
+    model: str
+    api_key_set: bool
+    max_tokens: int
+
+
+class LLMConfigUpdate(BaseModel):
+    provider: str | None = None
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+    max_tokens: int | None = None

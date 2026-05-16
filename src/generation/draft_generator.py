@@ -1,11 +1,10 @@
 import re
 from dataclasses import dataclass, field
 
-from openai import OpenAI
-
-from src.extraction.field_extractor import ExtractedFields, _vllm_extra
+from src.extraction.field_extractor import ExtractedFields
 from src.generation.prompts import build_prompt
 from src.retrieval.vector_store import RetrievedChunk
+from src.utils.llm_client import chat_extra_body, get_client
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -28,8 +27,9 @@ def generate_draft(
     chunks: list[RetrievedChunk],
     patterns: list[dict] | None = None,
     base_url: str = "http://localhost:8080/v1",
-    model: str = "Qwen/Qwen3-14B-AWQ",
+    model: str = "Qwen/Qwen3-4B-AWQ",
     api_key: str = "local",
+    provider: str = "vllm",
     temperature: float = 0.1,
     max_tokens: int = 2000,
     doc_meta: dict[str, dict] | None = None,
@@ -44,13 +44,13 @@ def generate_draft(
     patterns = patterns or []
     prompt = build_prompt(fields_by_doc, chunks, patterns, doc_meta=doc_meta)
 
-    client = OpenAI(base_url=base_url, api_key=api_key)
+    client = get_client(provider, base_url, api_key)
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
         max_tokens=max_tokens,
-        extra_body=_vllm_extra(base_url),
+        extra_body=chat_extra_body(provider),
     )
 
     draft_text = response.choices[0].message.content.strip()
