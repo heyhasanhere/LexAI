@@ -484,6 +484,8 @@ def _file_type(filename: str) -> str:
         return "pdf"
     if suffix in {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp"}:
         return "image"
+    if suffix in {".html", ".htm"}:
+        return "html"
     return "text"
 
 

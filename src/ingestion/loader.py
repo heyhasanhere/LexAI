@@ -1,4 +1,5 @@
 import mimetypes
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -17,6 +18,7 @@ SUPPORTED_MIME_TYPES = {
     "image/tiff",
     "image/bmp",
     "text/plain",
+    "text/html",
 }
 
 _EXT_MIME: dict[str, str] = {
@@ -28,6 +30,8 @@ _EXT_MIME: dict[str, str] = {
     ".tif": "image/tiff",
     ".bmp": "image/bmp",
     ".txt": "text/plain",
+    ".html": "text/html",
+    ".htm": "text/html",
 }
 
 
@@ -91,7 +95,29 @@ def load_document(path: Path, ocr_kwargs: dict | None = None, dpi: int = 300) ->
             pages=[PageResult(page_number=1, text=text, ocr_confidence=1.0, ocr_used=False)],
         )
 
+    if mime == "text/html":
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        text = _strip_html(raw)
+        return LoadedDocument(
+            path=path,
+            file_type="text",
+            pages=[PageResult(page_number=1, text=text, ocr_confidence=1.0, ocr_used=False)],
+        )
+
     raise ValueError(f"Unhandled MIME type: {mime}")
+
+
+def _strip_html(html: str) -> str:
+    html = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&lt;", "<", text)
+    text = re.sub(r"&gt;", ">", text)
+    text = re.sub(r"&[a-z]+;", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def _load_image(path: Path, ocr_kwargs: dict) -> LoadedDocument:
