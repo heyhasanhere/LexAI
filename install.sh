@@ -120,14 +120,14 @@ choose_mode() {
     echo "  2) LexAI remote GPU    — free, rate-limited Qwen3-14B hosted by the operator"
     echo "  3) Local GPU           — run Qwen3-14B locally (requires NVIDIA GPU with 24 GB VRAM)"
     echo ""
-    read -rp "Enter choice [1/2/3]: " MODE_CHOICE
+    read -rp "Enter choice [1/2/3]: " MODE_CHOICE </dev/tty
 
     case "$MODE_CHOICE" in
         1)
             echo ""
-            read -rp "OpenAI API key (sk-…): " OPENAI_KEY
+            read -rp "OpenAI API key (sk-…): " OPENAI_KEY </dev/tty
             [[ -z "$OPENAI_KEY" ]] && _die "API key cannot be empty."
-            read -rp "Model [gpt-4o-mini]: " OPENAI_MODEL
+            read -rp "Model [gpt-4o-mini]: " OPENAI_MODEL </dev/tty
             OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o-mini}"
 
             LLM_BASE_URL="https://api.openai.com/v1"
@@ -138,11 +138,11 @@ choose_mode() {
         2)
             echo ""
             if [[ -z "$LEXAI_REMOTE_URL" ]]; then
-                read -rp "Remote GPU URL (ask the operator running serve.sh): " LEXAI_REMOTE_URL
+                read -rp "Remote GPU URL (ask the operator running serve.sh): " LEXAI_REMOTE_URL </dev/tty
                 [[ -z "$LEXAI_REMOTE_URL" ]] && _die "Remote URL cannot be empty."
             fi
             _yellow "Using remote GPU at: $LEXAI_REMOTE_URL"
-            _yellow "(Rate-limited to 6 requests/min per IP via Cloudflare + nginx)"
+
 
             LLM_BASE_URL="$LEXAI_REMOTE_URL"
             LLM_MODEL="$LEXAI_REMOTE_MODEL"
@@ -162,7 +162,7 @@ choose_mode() {
             LLM_API_KEY="local"
             COMPOSE_PROFILES="full"
 
-            read -rp "HuggingFace token (optional, speeds downloads) [skip]: " HF_TOKEN
+            read -rp "HuggingFace token (optional, speeds downloads) [skip]: " HF_TOKEN </dev/tty
             HF_TOKEN="${HF_TOKEN:-}"
             ;;
         *)
