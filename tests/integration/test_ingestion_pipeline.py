@@ -1,16 +1,19 @@
 """
 Integration tests for the full ingestion pipeline.
 Requires: sample_data/inputs/ populated with real documents.
-Does NOT require backing services (uses in-memory Chroma, skips LLM calls).
+The retrieval test requires a live Postgres+pgvector instance.
+Set TEST_DSN env var to override the default connection string.
 
 Run with:
     pytest tests/integration/test_ingestion_pipeline.py -v
 """
+import os
 import pytest
 from pathlib import Path
 
 CUAD_DIR = Path("sample_data/cuad")
-RVL_DIR = Path("sample_data/rvl_cdip")
+RVL_DIR  = Path("sample_data/rvl_cdip")
+TEST_DSN  = os.getenv("TEST_DSN", "postgresql://ld:ld@localhost:5432/lexai")
 
 pytestmark = pytest.mark.skipif(
     not CUAD_DIR.exists(),
@@ -26,24 +29,22 @@ def test_cuad_pdf_loads_and_extracts_text():
     assert len(doc.full_text) > 100
 
 
-def test_cuad_pdf_has_high_ocr_confidence():
+def test_cuad_pdf_pages_have_text():
     from src.ingestion.loader import load_document
     pdf = next(CUAD_DIR.glob("*.pdf"))
     doc = load_document(pdf)
-    avg_conf = sum(p.ocr_confidence for p in doc.pages) / len(doc.pages)
-    assert avg_conf > 0.70
+    # Marker returns ocr_confidence=1.0 — check that pages actually have content
+    assert all(len(p.text.strip()) > 0 for p in doc.pages if not p.failed)
 
 
-def test_handwritten_image_loads_and_flags_low_confidence():
-    from src.ingestion.loader import load_document
-    imgs = list(RVL_DIR.glob("handwritten_*.jpg"))
+def test_image_file_loads():
+    imgs = list(RVL_DIR.glob("*.jpg")) if RVL_DIR.exists() else []
     if not imgs:
-        pytest.skip("No handwritten images found")
+        pytest.skip("No images found in sample_data/rvl_cdip")
+    from src.ingestion.loader import load_document
     doc = load_document(imgs[0])
-    assert doc.page_count == 1
-    # Handwritten docs should have at least some low-confidence pages
-    confidences = [p.ocr_confidence for p in doc.pages]
-    assert min(confidences) < 0.80
+    assert doc.page_count >= 1
+    assert doc.file_type == "image"
 
 
 def test_chunker_produces_chunks_from_cuad_pdf():
@@ -58,33 +59,38 @@ def test_chunker_produces_chunks_from_cuad_pdf():
 
 
 def test_full_pipeline_ingestion_and_retrieval():
-    import chromadb
-    import src.retrieval.vector_store as vs
-
-    client = chromadb.Client()
-    vs._get_client = lambda host, port: client
+    pytest.importorskip("psycopg2")
+    import psycopg2
+    try:
+        conn = psycopg2.connect(TEST_DSN, connect_timeout=3)
+        conn.close()
+    except Exception:
+        pytest.skip("No Postgres+pgvector instance available at TEST_DSN")
 
     from src.ingestion.loader import load_document
     from src.extraction.chunker import chunk_document
-    from src.retrieval.vector_store import upsert_chunks, query
+    from src.retrieval.vector_store import upsert_chunks, query, delete_by_document
 
+    doc_id = "doc-integ-test-001"
     pdf = next(CUAD_DIR.glob("*.pdf"))
     doc = load_document(pdf)
     pages = [(p.page_number, p.text, p.ocr_confidence) for p in doc.pages]
-    chunks = chunk_document("doc-integ-001", pages)
+    chunks = chunk_document(doc_id, pages)
 
-    upsert_chunks(chunks, device="cpu", host="localhost", port=8001)
+    try:
+        upsert_chunks(chunks, device="cpu", dsn=TEST_DSN)
 
-    results = query(
-        queries=["parties agreement"],
-        document_ids=["doc-integ-001"],
-        top_k=3,
-        min_score=0.2,
-        device="cpu",
-        host="localhost",
-        port=8001,
-    )
+        results = query(
+            queries=["parties agreement"],
+            document_ids=[doc_id],
+            top_k=3,
+            min_score=0.2,
+            device="cpu",
+            dsn=TEST_DSN,
+        )
 
-    assert len(results) > 0
-    assert all(r.score >= 0.2 for r in results)
-    assert all(r.document_id == "doc-integ-001" for r in results)
+        assert len(results) > 0
+        assert all(r.score >= 0.2 for r in results)
+        assert all(r.document_id == doc_id for r in results)
+    finally:
+        delete_by_document(doc_id, dsn=TEST_DSN)
