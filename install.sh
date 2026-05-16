@@ -117,7 +117,7 @@ choose_mode() {
     _bold "How do you want to run the LLM?"
     echo ""
     echo "  1) OpenAI API          — uses your own OpenAI key (GPT-4o-mini by default)"
-    echo "  2) LexAI remote GPU    — use the operator's hosted Qwen3-14B (requires access key)"
+    echo "  2) LexAI remote GPU    — free, rate-limited Qwen3-14B hosted by the operator"
     echo "  3) Local GPU           — run Qwen3-14B locally (requires NVIDIA GPU with 24 GB VRAM)"
     echo ""
     read -rp "Enter choice [1/2/3]: " MODE_CHOICE
@@ -137,12 +137,12 @@ choose_mode() {
             ;;
         2)
             echo ""
-            read -rp "LexAI access key: " LEXAI_KEY
-            [[ -z "$LEXAI_KEY" ]] && _die "Access key cannot be empty."
+            _yellow "No key required — the operator's GPU is open to all LexAI users."
+            _yellow "(Rate-limited to 6 requests/min per IP via Cloudflare + nginx)"
 
             LLM_BASE_URL="$LEXAI_REMOTE_URL"
             LLM_MODEL="$LEXAI_REMOTE_MODEL"
-            LLM_API_KEY="$LEXAI_KEY"
+            LLM_API_KEY="lexai-public"   # accepted by the gateway; not a secret
             COMPOSE_PROFILES="lite"
             ;;
         3)

@@ -1,6 +1,6 @@
 # Profiles:
 #   lite  — OpenAI API or remote GPU  (no local vLLM, no NVIDIA required)
-#   full  — local Qwen3-14B on NVIDIA GPUs
+#   full  — local Qwen3-14B on NVIDIA GPUs + rate-limited public gateway
 #
 # The installer writes .env and sets COMPOSE_PROFILES automatically.
 # Manual usage:
@@ -88,13 +88,14 @@ services:
       api:
         condition: service_healthy
 
-  # ── Local GPU inference (full profile only) ────────────────────────────────
+  # ── Local GPU inference + public gateway (full profile only) ──────────────
 
   vllm:
     image: vllm/vllm-openai:latest
     profiles: [full]
-    ports:
-      - "8080:8000"
+    # NOT exposed on host — nginx is the only entry point
+    expose:
+      - "8000"
     volumes:
       - huggingface_cache:/root/.cache/huggingface
     environment:
@@ -106,6 +107,7 @@ services:
       --gpu-memory-utilization 0.80
       --dtype bfloat16
       --enforce-eager
+      --max-num-seqs 4
     deploy:
       resources:
         reservations:
@@ -119,6 +121,19 @@ services:
       timeout: 10s
       retries: 10
       start_period: 120s
+
+  # Rate-limiting gateway — exposes port 8090 for the Cloudflare tunnel
+  gateway:
+    image: nginx:alpine
+    profiles: [full]
+    ports:
+      - "127.0.0.1:8090:80"   # only loopback — Cloudflare tunnel connects here
+    volumes:
+      - ./config/nginx-gateway.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      vllm:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres_data:
