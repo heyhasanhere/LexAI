@@ -1,26 +1,65 @@
 #!/usr/bin/env bash
-# deploy.sh — start a Cloudflare Quick Tunnel, publish the live URL to README.md,
-# commit and push to GitHub, then keep the tunnel running until Ctrl-C.
+# deploy.sh — start a Cloudflare Quick Tunnel as a background daemon, publish
+# the live URL to README.md, commit and push to GitHub, then exit.
+# The tunnel keeps running after this script exits.
+#
+# Usage:
+#   bash scripts/deploy.sh          # start tunnel and update README
+#   bash scripts/deploy.sh stop     # kill the running tunnel
+#   bash scripts/deploy.sh status   # show whether the tunnel is running
 #
 # Prerequisites:
 #   - docker compose services up (COMPOSE_PROFILES=lite docker compose up -d)
 #   - git remote 'origin' configured with push access
 #   - cloudflared installed (auto-installed if missing)
-#
-# Usage:
-#   bash scripts/deploy.sh
+
 set -euo pipefail
 
 UI_PORT=8501
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 README="$REPO_ROOT/README.md"
+PID_FILE="/tmp/lexai-tunnel.pid"
+LOG_FILE="/tmp/lexai-tunnel.log"
 
 _green()  { printf '\033[0;32m%s\033[0m\n' "$*"; }
 _yellow() { printf '\033[0;33m%s\033[0m\n' "$*"; }
 _bold()   { printf '\033[1m%s\033[0m\n'   "$*"; }
-_die()    { printf '\033[0;31mERROR: %s\033[0m\n' "$*"; exit 1; }
+_red()    { printf '\033[0;31m%s\033[0m\n' "$*"; }
+_die()    { _red "ERROR: $*"; exit 1; }
 
-# ── Verify UI is up ─────────────────────────────────────────────────────────
+# ── stop / status sub-commands ──────────────────────────────────────────────
+
+if [[ "${1:-}" == "stop" ]]; then
+    if [[ -f "$PID_FILE" ]]; then
+        PID=$(cat "$PID_FILE")
+        kill "$PID" 2>/dev/null && _green "Tunnel (PID $PID) stopped." || _yellow "Process $PID was not running."
+        rm -f "$PID_FILE"
+    else
+        _yellow "No PID file found — tunnel may not be running."
+    fi
+    exit 0
+fi
+
+if [[ "${1:-}" == "status" ]]; then
+    if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        _green "Tunnel is running (PID $(cat "$PID_FILE"))."
+        grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG_FILE" 2>/dev/null | tail -1 \
+            && true || _yellow "URL not yet captured."
+    else
+        _yellow "Tunnel is not running."
+    fi
+    exit 0
+fi
+
+# ── stop any existing tunnel first ─────────────────────────────────────────
+
+if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    _yellow "Stopping previous tunnel (PID $(cat "$PID_FILE"))…"
+    kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    rm -f "$PID_FILE"
+fi
+
+# ── verify UI is up ─────────────────────────────────────────────────────────
 
 echo ""
 _bold "Checking services…"
@@ -28,7 +67,7 @@ curl -sf --max-time 5 "http://localhost:$UI_PORT" -o /dev/null \
     || _die "Streamlit UI not responding on port $UI_PORT. Run: COMPOSE_PROFILES=lite docker compose up -d"
 _green "✓ UI is up (port $UI_PORT)"
 
-# ── Install cloudflared if missing ──────────────────────────────────────────
+# ── install cloudflared if missing ──────────────────────────────────────────
 
 if ! command -v cloudflared &>/dev/null; then
     _yellow "cloudflared not found — installing…"
@@ -45,38 +84,32 @@ if ! command -v cloudflared &>/dev/null; then
     _green "✓ cloudflared installed"
 fi
 
-# ── Named pipe for URL handoff ──────────────────────────────────────────────
-
-URL_PIPE="$(mktemp -u)"
-mkfifo "$URL_PIPE"
-trap 'rm -f "$URL_PIPE"' EXIT
-
-# ── Start tunnel in background ──────────────────────────────────────────────
+# ── start tunnel as a detached daemon ──────────────────────────────────────
 
 echo ""
-_bold "Starting Cloudflare tunnel…"
+_bold "Starting Cloudflare tunnel (daemon mode)…"
 
-TUNNEL_PID=""
-(
-    cloudflared tunnel --url "http://localhost:$UI_PORT" 2>&1 | while IFS= read -r line; do
-        echo "$line" >&2
-        if echo "$line" | grep -qE 'https://[a-z0-9-]+\.trycloudflare\.com'; then
-            URL=$(echo "$line" | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com')
-            # Send URL to main process once
-            echo "$URL" > "$URL_PIPE" 2>/dev/null || true
-        fi
-    done
-) &
+# Truncate log so we scan only this session's output
+> "$LOG_FILE"
+
+nohup cloudflared tunnel --url "http://localhost:$UI_PORT" \
+    >"$LOG_FILE" 2>&1 &
 TUNNEL_PID=$!
+echo "$TUNNEL_PID" > "$PID_FILE"
+disown "$TUNNEL_PID"
 
-trap 'kill "$TUNNEL_PID" 2>/dev/null; rm -f "$URL_PIPE"; echo ""; _yellow "Tunnel stopped."; exit 0' INT TERM
+_green "✓ Tunnel started (PID $TUNNEL_PID, log: $LOG_FILE)"
+_yellow "Waiting for tunnel URL (up to 60 s)…"
 
-# ── Wait for URL ────────────────────────────────────────────────────────────
-
-_yellow "Waiting for tunnel URL…"
+# Poll the log file for the URL
 LIVE_URL=""
-read -t 60 LIVE_URL < "$URL_PIPE" || _die "Timed out waiting for tunnel URL. Is cloudflared reachable?"
-rm -f "$URL_PIPE"
+for i in $(seq 1 30); do
+    sleep 2
+    LIVE_URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG_FILE" 2>/dev/null | head -1 || true)
+    [[ -n "$LIVE_URL" ]] && break
+done
+
+[[ -n "$LIVE_URL" ]] || _die "Timed out waiting for tunnel URL. Check $LOG_FILE for details."
 
 echo ""
 _bold "════════════════════════════════════════════"
@@ -85,12 +118,10 @@ _yellow "  Share this link — users open LexAI here"
 _bold "════════════════════════════════════════════"
 echo ""
 
-# ── Update README.md ────────────────────────────────────────────────────────
+# ── update README.md ────────────────────────────────────────────────────────
 
 _yellow "Updating README.md with new live URL…"
 
-# If a live-demo line already exists, replace the URL in it.
-# Otherwise, insert a "Live Demo" line after the first H1 heading.
 if grep -q "<!-- live-demo -->" "$README"; then
     sed -i "s|<!-- live-demo -->.*|<!-- live-demo --> **[▶ Open Live Demo]($LIVE_URL)**|" "$README"
 else
@@ -100,7 +131,7 @@ fi
 
 _green "✓ README.md updated"
 
-# ── Commit and push ─────────────────────────────────────────────────────────
+# ── commit and push ─────────────────────────────────────────────────────────
 
 cd "$REPO_ROOT"
 
@@ -113,7 +144,9 @@ else
     _yellow "README.md unchanged (URL was already up to date)"
 fi
 
-# ── Keep tunnel alive ───────────────────────────────────────────────────────
-
-_bold "Tunnel is running. Press Ctrl-C to stop."
-wait "$TUNNEL_PID"
+echo ""
+_bold "Tunnel is running in the background."
+_yellow "  Stop:    bash scripts/deploy.sh stop"
+_yellow "  Status:  bash scripts/deploy.sh status"
+_yellow "  Log:     $LOG_FILE"
+echo ""
