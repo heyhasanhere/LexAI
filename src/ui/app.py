@@ -238,6 +238,15 @@ def _pr(page) -> str:
 def _render_extracted_fields(fields: dict) -> None:
     """Render all extracted sections from a document's fields_json dict."""
 
+    # ABOUT THIS DOCUMENT
+    notes = fields.get("extraction_notes")
+    if notes:
+        st.markdown("**About This Document:**")
+        st.markdown(
+            f'<div style="font-size:13px;color:#374151;padding:4px 0 12px 0">{notes}</div>',
+            unsafe_allow_html=True,
+        )
+
     # PARTIES
     parties = fields.get("parties") or []
     if parties:
@@ -447,11 +456,7 @@ def _render_extracted_fields(fields: dict) -> None:
             c1.markdown(f'<span class="field-label">{sg.get("field", "")}</span>', unsafe_allow_html=True)
             c2.markdown(f'{sg.get("value", "")}{_pr(sg.get("page"))}', unsafe_allow_html=True)
 
-    # Extraction notes
-    notes = fields.get("extraction_notes")
-    if notes:
-        with st.expander("Extraction notes"):
-            st.caption(notes)
+    pass  # extraction_notes rendered at the top of this function, not here
 
 
 # ── Page: Process ───────────────────────────────────────────────────────────────
